@@ -293,7 +293,7 @@ impl MemoryManager {
             
             // Check each byte in the pattern
             for j in 0..pattern.len() {
-                // If mask character is '?' or 'x', it's a wildcard - skip comparison
+                // If mask character is '?', it's a wildcard - skip comparison
                 if mask_bytes[j] == b'?' {
                     continue;
                 }

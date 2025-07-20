@@ -4,6 +4,25 @@ use pyo3::types::{PyDict, PyType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Get a reference to the global memory manager from the Universe core
+fn get_global_memory_manager() -> PyResult<Arc<Mutex<MemoryManager>>> {
+    // Import the function to get core reference from python_interface
+    use crate::python_interface::get_core_reference;
+    
+    let core = get_core_reference()?;
+    let core_guard = core.lock().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Failed to acquire core lock"
+        )
+    })?;
+
+    core_guard.memory_manager().ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Memory manager not initialized in Universe core"
+        )
+    })
+}
+
 /// Type-safe specification for all supported data types
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(name = "TypeSpec")]
@@ -248,14 +267,8 @@ impl PyBasicPointer {
     #[new]
     #[pyo3(signature = (address, type_spec))]
     pub fn new(address: usize, type_spec: &Bound<'_, PyAny>) -> PyResult<Self> {
-        // This is a placeholder - in the full implementation, this would get the memory manager
-        // from the global Universe core. For now, we'll create a temporary one.
-        let memory_manager = Arc::new(Mutex::new(MemoryManager::new().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to create memory manager: {}",
-                e
-            ))
-        })?));
+        // Get the memory manager from the global Universe core
+        let memory_manager = get_global_memory_manager()?;
 
         // Try to extract TypeSpec enum first
         let basic_type = if let Ok(type_spec_enum) = type_spec.extract::<TypeSpec>() {
@@ -858,6 +871,7 @@ fn calculate_field_size(field_type: &FieldType) -> PyResult<usize> {
         FieldType::Structure(_) => {
             // For structures, we'll need to look up the definition
             // For now, assume pointer size (8 bytes on x64)
+            // TODO: In a full implementation, we would look up the actual structure size
             Ok(8)
         }
         FieldType::Array(element_type, count) => {
@@ -867,8 +881,31 @@ fn calculate_field_size(field_type: &FieldType) -> PyResult<usize> {
     }
 }
 
+/// Calculate the size of a field type with structure registry access
+fn calculate_field_size_with_registry(
+    field_type: &FieldType, 
+    registry: &HashMap<String, StructureDefinition>
+) -> PyResult<usize> {
+    match field_type {
+        FieldType::Basic(basic_type) => Ok(TypeSerializer::get_type_size(basic_type)),
+        FieldType::Structure(struct_name) => {
+            if let Some(struct_def) = registry.get(struct_name) {
+                Ok(struct_def.total_size)
+            } else {
+                // If structure not found in registry, assume pointer size
+                Ok(8)
+            }
+        }
+        FieldType::Array(element_type, count) => {
+            let element_size = calculate_field_size_with_registry(element_type, registry)?;
+            Ok(element_size * count)
+        }
+    }
+}
+
 /// Python wrapper for structure pointers with dynamic field access
 #[pyclass(name = "StructurePointer")]
+#[derive(Clone)]
 pub struct PyStructurePointer {
     address: usize,
     structure_def: StructureDefinition,
@@ -884,14 +921,8 @@ impl PyStructurePointer {
         // Create structure definition from the Python class
         let structure_def = PyStructure::create_definition_from_class(structure_class)?;
         
-        // This is a placeholder - in the full implementation, this would get the memory manager
-        // from the global Universe core. For now, we'll create a temporary one.
-        let memory_manager = Arc::new(Mutex::new(MemoryManager::new().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to create memory manager: {}",
-                e
-            ))
-        })?));
+        // Get the memory manager from the global Universe core
+        let memory_manager = get_global_memory_manager()?;
 
         let structure_registry = Arc::new(Mutex::new(HashMap::new()));
 
@@ -934,6 +965,9 @@ impl PyStructurePointer {
                 ))
             })?;
 
+        // Validate the assignment before writing
+        self.validate_structure_assignment(&field.field_type, &value)?;
+
         // Calculate the field address
         let field_address = self.address + field.offset;
 
@@ -971,6 +1005,133 @@ impl PyStructurePointer {
     /// String representation
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    /// Copy this entire structure to another address
+    pub fn copy_to(&self, dest_address: usize) -> PyResult<()> {
+        let memory_manager = self.memory_manager.lock().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Failed to acquire memory manager lock"
+            )
+        })?;
+
+        // Read the entire structure data
+        let source_data = memory_manager.read_memory(self.address, self.structure_def.total_size)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to read source structure data: {}", e
+                ))
+            })?;
+
+        // Write the data to the destination
+        memory_manager.write_memory(dest_address, &source_data)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to write structure data: {}", e
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    /// Copy another structure to this address
+    pub fn copy_from(&self, source: &PyStructurePointer) -> PyResult<()> {
+        // Validate that the structure types match
+        if source.structure_def.name != self.structure_def.name {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Structure type mismatch: expected '{}', got '{}'",
+                self.structure_def.name, source.structure_def.name
+            )));
+        }
+
+        source.copy_to(self.address)
+    }
+
+    /// Get all field values as a dictionary
+    pub fn to_dict(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            
+            for field in &self.structure_def.fields {
+                let field_address = self.address + field.offset;
+                let field_value = self.read_field_value(field_address, &field.field_type)?;
+                dict.set_item(&field.name, field_value)?;
+            }
+            
+            Ok(dict.into())
+        })
+    }
+
+    /// Set multiple field values from a dictionary
+    pub fn from_dict(&self, dict: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
+        self.write_structure_from_dict(self.address, &self.structure_def.name, dict)
+    }
+
+    /// Get a list of all field names
+    pub fn get_field_names(&self) -> Vec<String> {
+        self.structure_def.fields.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// Get field information (name, type, offset, size)
+    pub fn get_field_info(&self, field_name: &str) -> PyResult<PyObject> {
+        let field = self.structure_def.fields.iter()
+            .find(|f| f.name == field_name)
+            .ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyAttributeError, _>(format!(
+                    "Structure '{}' has no field '{}'",
+                    self.structure_def.name, field_name
+                ))
+            })?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("name", &field.name)?;
+            dict.set_item("offset", field.offset)?;
+            dict.set_item("size", field.size)?;
+            
+            let type_name = match &field.field_type {
+                FieldType::Basic(basic_type) => {
+                    match basic_type {
+                        BasicType::Int32 => "int32",
+                        BasicType::Int64 => "int64",
+                        BasicType::Float32 => "float32",
+                        BasicType::Float64 => "float64",
+                        BasicType::String => "string",
+                        BasicType::Bool => "bool",
+                        BasicType::UInt32 => "uint32",
+                        BasicType::UInt64 => "uint64",
+                        BasicType::Pointer => "pointer",
+                    }
+                }
+                FieldType::Structure(name) => name.as_str(),
+                FieldType::Array(element_type, count) => {
+                    // For arrays, create a descriptive string
+                    let element_name = match element_type.as_ref() {
+                        FieldType::Basic(basic_type) => {
+                            match basic_type {
+                                BasicType::Int32 => "int32",
+                                BasicType::Int64 => "int64",
+                                BasicType::Float32 => "float32",
+                                BasicType::Float64 => "float64",
+                                BasicType::String => "string",
+                                BasicType::Bool => "bool",
+                                BasicType::UInt32 => "uint32",
+                                BasicType::UInt64 => "uint64",
+                                BasicType::Pointer => "pointer",
+                            }
+                        }
+                        FieldType::Structure(name) => name.as_str(),
+                        FieldType::Array(_, _) => "nested_array", // Simplified for nested arrays
+                    };
+                    dict.set_item("array_element_type", element_name)?;
+                    dict.set_item("array_count", *count)?;
+                    "array"
+                }
+            };
+            
+            dict.set_item("type", type_name)?;
+            Ok(dict.into())
+        })
     }
 }
 
@@ -1051,12 +1212,12 @@ impl PyStructurePointer {
                     ))
                 })?;
             }
-            FieldType::Structure(_) => {
-                // For structure fields, we expect the value to be another structure pointer
-                // or we could copy the entire structure data
-                return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
-                    "Writing structure fields not yet implemented"
-                ));
+            FieldType::Structure(struct_name) => {
+                // For structure fields, we support multiple input types:
+                // 1. Another structure pointer of the same type (copy entire structure)
+                // 2. A dictionary with field values
+                // 3. A Python object with matching attributes
+                self.write_structure_field(address, struct_name, value)?;
             }
             FieldType::Array(element_type, count) => {
                 // For arrays, expect a list of values
@@ -1085,6 +1246,394 @@ impl PyStructurePointer {
     fn calculate_field_size(&self, field_type: &FieldType) -> PyResult<usize> {
         PyStructure::calculate_field_size(field_type)
     }
+
+    /// Write a structure field value, supporting multiple input types
+    fn write_structure_field(&self, address: usize, struct_name: &str, value: PyObject) -> PyResult<()> {
+        Python::with_gil(|py| {
+            // Try to extract as another structure pointer first
+            if let Ok(other_struct) = value.extract::<PyStructurePointer>(py) {
+                // Validate that the structure types match
+                if other_struct.structure_def.name != *struct_name {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Structure type mismatch: expected '{}', got '{}'",
+                        struct_name, other_struct.structure_def.name
+                    )));
+                }
+                
+                // Copy the entire structure data from source to destination
+                return self.copy_structure_data(&other_struct, address);
+            }
+
+            // Try to extract as a dictionary
+            if let Ok(dict) = value.downcast_bound::<pyo3::types::PyDict>(py) {
+                return self.write_structure_from_dict(address, struct_name, dict);
+            }
+
+            // Try to extract as an object with attributes
+            self.write_structure_from_object(address, struct_name, &value.bind(py))
+        })
+    }
+
+    /// Copy structure data from another structure pointer
+    fn copy_structure_data(&self, source: &PyStructurePointer, dest_address: usize) -> PyResult<()> {
+        let memory_manager = self.memory_manager.lock().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Failed to acquire memory manager lock"
+            )
+        })?;
+
+        // Read the entire structure data from source
+        let source_data = memory_manager.read_memory(source.address, source.structure_def.total_size)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to read source structure data: {}", e
+                ))
+            })?;
+
+        // Write the data to the destination
+        memory_manager.write_memory(dest_address, &source_data)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to write structure data: {}", e
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    /// Write structure fields from a Python dictionary
+    fn write_structure_from_dict(&self, address: usize, struct_name: &str, dict: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
+        // Get the structure definition
+        let registry = self.structure_registry.lock().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Failed to acquire structure registry lock"
+            )
+        })?;
+        
+        let struct_def = registry.get(struct_name).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown structure type: {}", struct_name
+            ))
+        })?.clone();
+        
+        drop(registry); // Release the lock
+
+        // Write each field from the dictionary
+        for (key, value) in dict.iter() {
+            let field_name = key.extract::<String>()?;
+            
+            // Find the field definition
+            if let Some(field) = struct_def.fields.iter().find(|f| f.name == field_name) {
+                let field_address = address + field.offset;
+                self.write_field_value(field_address, &field.field_type, value.unbind())?;
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyAttributeError, _>(format!(
+                    "Structure '{}' has no field '{}'", struct_name, field_name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write structure fields from a Python object with attributes
+    fn write_structure_from_object(&self, address: usize, struct_name: &str, obj: &Bound<'_, PyAny>) -> PyResult<()> {
+        // Get the structure definition
+        let registry = self.structure_registry.lock().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Failed to acquire structure registry lock"
+            )
+        })?;
+        
+        let struct_def = registry.get(struct_name).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown structure type: {}", struct_name
+            ))
+        })?.clone();
+        
+        drop(registry); // Release the lock
+
+        // Try to read each field from the object
+        for field in &struct_def.fields {
+            if let Ok(field_value) = obj.getattr(&field.name) {
+                let field_address = address + field.offset;
+                self.write_field_value(field_address, &field.field_type, field_value.unbind())?;
+            }
+            // If the field doesn't exist on the object, we skip it (partial assignment)
+        }
+
+        Ok(())
+    }
+
+    /// Validate structure field assignment
+    fn validate_structure_assignment(&self, field_type: &FieldType, value: &PyObject) -> PyResult<()> {
+        Python::with_gil(|py| {
+            match field_type {
+                FieldType::Basic(basic_type) => {
+                    // Validate that the value can be converted to the expected basic type
+                    match basic_type {
+                        BasicType::Int32 => {
+                            value.extract::<i32>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected int32 value"
+                                )
+                            })?;
+                        }
+                        BasicType::Int64 => {
+                            value.extract::<i64>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected int64 value"
+                                )
+                            })?;
+                        }
+                        BasicType::Float32 => {
+                            value.extract::<f32>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected float32 value"
+                                )
+                            })?;
+                        }
+                        BasicType::Float64 => {
+                            value.extract::<f64>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected float64 value"
+                                )
+                            })?;
+                        }
+                        BasicType::String => {
+                            value.extract::<String>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected string value"
+                                )
+                            })?;
+                        }
+                        BasicType::Bool => {
+                            value.extract::<bool>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected bool value"
+                                )
+                            })?;
+                        }
+                        BasicType::UInt32 => {
+                            value.extract::<u32>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected uint32 value"
+                                )
+                            })?;
+                        }
+                        BasicType::UInt64 => {
+                            value.extract::<u64>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected uint64 value"
+                                )
+                            })?;
+                        }
+                        BasicType::Pointer => {
+                            value.extract::<usize>(py).map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    "Expected pointer/address value"
+                                )
+                            })?;
+                        }
+                    }
+                }
+                FieldType::Structure(_) => {
+                    // For structures, we accept structure pointers, dicts, or objects with attributes
+                    // The validation is done in write_structure_field
+                }
+                FieldType::Array(element_type, expected_count) => {
+                    // For arrays, validate that we have a list of the correct length
+                    let list = value.extract::<Vec<PyObject>>(py).map_err(|_| {
+                        PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                            "Expected list for array field"
+                        )
+                    })?;
+                    
+                    if list.len() != *expected_count {
+                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Array length mismatch: expected {}, got {}",
+                            expected_count, list.len()
+                        )));
+                    }
+
+                    // Validate each element
+                    for element in &list {
+                        self.validate_structure_assignment(element_type, element)?;
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Comprehensive structure serialization system
+pub struct StructureSerializer;
+
+impl StructureSerializer {
+    /// Serialize a complete structure to bytes
+    pub fn serialize_structure(
+        structure_def: &StructureDefinition,
+        values: &std::collections::HashMap<String, PyObject>,
+        registry: &HashMap<String, StructureDefinition>
+    ) -> PyResult<Vec<u8>> {
+        let mut buffer = vec![0u8; structure_def.total_size];
+        
+        for field in &structure_def.fields {
+            if let Some(value) = values.get(&field.name) {
+                let field_bytes = Self::serialize_field_value(&field.field_type, value, registry)?;
+                
+                // Ensure we don't write beyond the field boundaries
+                let end_offset = field.offset + field.size;
+                if end_offset <= buffer.len() {
+                    let copy_size = field_bytes.len().min(field.size);
+                    buffer[field.offset..field.offset + copy_size].copy_from_slice(&field_bytes[..copy_size]);
+                }
+            }
+        }
+        
+        Ok(buffer)
+    }
+    
+    /// Serialize a single field value to bytes
+    pub fn serialize_field_value(
+        field_type: &FieldType,
+        value: &PyObject,
+        registry: &HashMap<String, StructureDefinition>
+    ) -> PyResult<Vec<u8>> {
+        match field_type {
+            FieldType::Basic(basic_type) => {
+                Python::with_gil(|py| {
+                    TypeSerializer::serialize_to_bytes(value.clone_ref(py), basic_type)
+                })
+            }
+            FieldType::Structure(struct_name) => {
+                // For nested structures, we need to serialize the entire structure
+                if let Some(struct_def) = registry.get(struct_name) {
+                    Python::with_gil(|py| {
+                        // Try to extract as structure pointer
+                        if let Ok(struct_ptr) = value.extract::<PyStructurePointer>(py) {
+                            // Read the structure data directly
+                            let memory_manager = struct_ptr.memory_manager.lock().map_err(|_| {
+                                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                                    "Failed to acquire memory manager lock"
+                                )
+                            })?;
+                            
+                            return memory_manager.read_memory(struct_ptr.address, struct_def.total_size)
+                                .map_err(|e| {
+                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                                        "Failed to read structure data: {}", e
+                                    ))
+                                });
+                        }
+                        
+                        // Try to extract as dictionary
+                        if let Ok(dict) = value.downcast_bound::<pyo3::types::PyDict>(py) {
+                            let mut field_values = std::collections::HashMap::new();
+                            for (key, val) in dict.iter() {
+                                let field_name = key.extract::<String>()?;
+                                field_values.insert(field_name, val.unbind());
+                            }
+                            return Self::serialize_structure(struct_def, &field_values, registry);
+                        }
+                        
+                        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                            "Structure field value must be a structure pointer or dictionary"
+                        ))
+                    })
+                } else {
+                    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Unknown structure type: {}", struct_name
+                    )))
+                }
+            }
+            FieldType::Array(element_type, count) => {
+                Python::with_gil(|py| {
+                    let list = value.extract::<Vec<PyObject>>(py)?;
+                    if list.len() != *count {
+                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Array length mismatch: expected {}, got {}",
+                            count, list.len()
+                        )));
+                    }
+                    
+                    let mut result = Vec::new();
+                    for element in &list {
+                        let element_bytes = Self::serialize_field_value(element_type, element, registry)?;
+                        result.extend_from_slice(&element_bytes);
+                    }
+                    
+                    Ok(result)
+                })
+            }
+        }
+    }
+    
+    /// Deserialize a complete structure from bytes
+    pub fn deserialize_structure(
+        structure_def: &StructureDefinition,
+        data: &[u8],
+        registry: &HashMap<String, StructureDefinition>
+    ) -> PyResult<std::collections::HashMap<String, PyObject>> {
+        let mut result = std::collections::HashMap::new();
+        
+        for field in &structure_def.fields {
+            if field.offset + field.size <= data.len() {
+                let field_data = &data[field.offset..field.offset + field.size];
+                let field_value = Self::deserialize_field_value(&field.field_type, field_data, registry)?;
+                result.insert(field.name.clone(), field_value);
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    /// Deserialize a single field value from bytes
+    pub fn deserialize_field_value(
+        field_type: &FieldType,
+        data: &[u8],
+        registry: &HashMap<String, StructureDefinition>
+    ) -> PyResult<PyObject> {
+        match field_type {
+            FieldType::Basic(basic_type) => {
+                TypeSerializer::deserialize_from_bytes(data, basic_type)
+            }
+            FieldType::Structure(struct_name) => {
+                if let Some(struct_def) = registry.get(struct_name) {
+                    let field_values = Self::deserialize_structure(struct_def, data, registry)?;
+                    
+                    Python::with_gil(|py| {
+                        let dict = pyo3::types::PyDict::new(py);
+                        for (key, value) in field_values {
+                            dict.set_item(key, value)?;
+                        }
+                        Ok(dict.into())
+                    })
+                } else {
+                    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Unknown structure type: {}", struct_name
+                    )))
+                }
+            }
+            FieldType::Array(element_type, count) => {
+                let element_size = calculate_field_size_with_registry(element_type, registry)?;
+                let mut result = Vec::new();
+                
+                for i in 0..*count {
+                    let start = i * element_size;
+                    let end = start + element_size;
+                    if end <= data.len() {
+                        let element_data = &data[start..end];
+                        let element_value = Self::deserialize_field_value(element_type, element_data, registry)?;
+                        result.push(element_value);
+                    }
+                }
+                
+                Python::with_gil(|py| Ok(result.into_pyobject(py)?.into()))
+            }
+        }
+    }
 }
 
 /// Enhanced Pointer creation function that handles TypeSpec enums, basic types and structures
@@ -1092,13 +1641,13 @@ impl PyStructurePointer {
 pub fn create_pointer(address: usize, type_spec: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     Python::with_gil(|py| {
         // Check if it's a TypeSpec enum (preferred method)
-        if let Ok(type_spec_enum) = type_spec.extract::<TypeSpec>() {
+        if let Ok(_type_spec_enum) = type_spec.extract::<TypeSpec>() {
             let basic_pointer = PyBasicPointer::new(address, type_spec)?;
             return Ok(basic_pointer.into_pyobject(py)?.into());
         }
 
         // Check if it's a string (basic type - backward compatibility)
-        if let Ok(type_name) = type_spec.extract::<String>() {
+        if let Ok(_type_name) = type_spec.extract::<String>() {
             let basic_pointer = PyBasicPointer::new(address, type_spec)?;
             return Ok(basic_pointer.into_pyobject(py)?.into());
         }

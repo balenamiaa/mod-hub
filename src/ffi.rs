@@ -1,4 +1,5 @@
 use crate::core::UniverseError;
+use crate::ffi_asm;
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 use std::collections::HashMap;
@@ -6,15 +7,22 @@ use std::ffi::CString;
 use std::mem;
 
 /// Supported native types for FFI
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NativeType {
+    Int8,
+    Int16,
     Int32,
     Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
     Float32,
     Float64,
     Pointer,
     CString,
     Void,
+    Struct(String),  // Named structure type
 }
 
 /// Supported calling conventions
@@ -77,6 +85,14 @@ impl PyCallableFunction {
         for (i, arg_type) in self.info.arg_types.iter().enumerate() {
             let arg = args.get_item(i)?;
             let native_value = match arg_type {
+                NativeType::Int8 => {
+                    let val: i8 = arg.extract()?;
+                    val as u64
+                }
+                NativeType::Int16 => {
+                    let val: i16 = arg.extract()?;
+                    val as u64
+                }
                 NativeType::Int32 => {
                     let val: i32 = arg.extract()?;
                     val as u64
@@ -84,6 +100,22 @@ impl PyCallableFunction {
                 NativeType::Int64 => {
                     let val: i64 = arg.extract()?;
                     val as u64
+                }
+                NativeType::UInt8 => {
+                    let val: u8 = arg.extract()?;
+                    val as u64
+                }
+                NativeType::UInt16 => {
+                    let val: u16 = arg.extract()?;
+                    val as u64
+                }
+                NativeType::UInt32 => {
+                    let val: u32 = arg.extract()?;
+                    val as u64
+                }
+                NativeType::UInt64 => {
+                    let val: u64 = arg.extract()?;
+                    val
                 }
                 NativeType::Float32 => {
                     let val: f32 = arg.extract()?;
@@ -94,8 +126,22 @@ impl PyCallableFunction {
                     unsafe { mem::transmute::<f64, u64>(val) }
                 }
                 NativeType::Pointer => {
-                    let val: usize = arg.extract()?;
-                    val as u64
+                    // Handle different pointer types
+                    if arg.is_instance_of::<pyo3::types::PyInt>() {
+                        // Raw pointer value
+                        let val: usize = arg.extract()?;
+                        val as u64
+                    } else {
+                        // Check if it's a structure pointer
+                        if arg.hasattr("_address")? {
+                            let addr = arg.getattr("_address")?.extract::<usize>()?;
+                            addr as u64
+                        } else {
+                            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                "Expected pointer object with _address attribute"
+                            ));
+                        }
+                    }
                 }
                 NativeType::CString => {
                     let val: String = arg.extract()?;
@@ -105,6 +151,18 @@ impl PyCallableFunction {
                     // Note: This leaks memory - in a real implementation we'd need proper lifetime management
                     std::mem::forget(c_string);
                     ptr as u64
+                }
+                NativeType::Struct(struct_name) => {
+                    // Handle structure by reference
+                    if arg.hasattr("_address")? {
+                        // It's a structure pointer, pass its address
+                        let addr = arg.getattr("_address")?.extract::<usize>()?;
+                        addr as u64
+                    } else {
+                        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                            format!("Expected structure pointer for type {}", struct_name)
+                        ));
+                    }
                 }
                 NativeType::Void => {
                     return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Cannot pass void as argument"));
@@ -118,94 +176,48 @@ impl PyCallableFunction {
 
     /// Call the native function with marshalled arguments
     fn call_native_function(&self, args: &[u64]) -> Result<u64, UniverseError> {
-        // This is a simplified implementation - in a real scenario we'd need proper
-        // assembly code generation for different calling conventions
-        match self.info.calling_convention {
-            CallingConvention::Cdecl => self.call_cdecl(args),
-            CallingConvention::Stdcall => self.call_stdcall(args),
-            CallingConvention::Fastcall => self.call_fastcall(args),
-        }
-    }
-
-    /// Call function using cdecl calling convention
-    fn call_cdecl(&self, args: &[u64]) -> Result<u64, UniverseError> {
-        // Simplified implementation - in reality this would require inline assembly
-        // or dynamic code generation to properly handle calling conventions
-        unsafe {
-            match args.len() {
-                0 => {
-                    let func: extern "C" fn() -> u64 = mem::transmute(self.info.address);
-                    Ok(func())
-                }
-                1 => {
-                    let func: extern "C" fn(u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0]))
-                }
-                2 => {
-                    let func: extern "C" fn(u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1]))
-                }
-                3 => {
-                    let func: extern "C" fn(u64, u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1], args[2]))
-                }
-                4 => {
-                    let func: extern "C" fn(u64, u64, u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1], args[2], args[3]))
-                }
-                _ => Err(UniverseError::SystemError("Too many arguments for cdecl call".to_string()))
-            }
-        }
-    }
-
-    /// Call function using stdcall calling convention
-    fn call_stdcall(&self, args: &[u64]) -> Result<u64, UniverseError> {
-        // Simplified implementation - stdcall is similar to cdecl but callee cleans stack
-        // Using "system" ABI which maps to stdcall on Windows
-        unsafe {
-            match args.len() {
-                0 => {
-                    let func: extern "system" fn() -> u64 = mem::transmute(self.info.address);
-                    Ok(func())
-                }
-                1 => {
-                    let func: extern "system" fn(u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0]))
-                }
-                2 => {
-                    let func: extern "system" fn(u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1]))
-                }
-                3 => {
-                    let func: extern "system" fn(u64, u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1], args[2]))
-                }
-                4 => {
-                    let func: extern "system" fn(u64, u64, u64, u64) -> u64 = mem::transmute(self.info.address);
-                    Ok(func(args[0], args[1], args[2], args[3]))
-                }
-                _ => Err(UniverseError::SystemError("Too many arguments for stdcall call".to_string()))
-            }
-        }
-    }
-
-    /// Call function using fastcall calling convention
-    fn call_fastcall(&self, args: &[u64]) -> Result<u64, UniverseError> {
-        // Simplified implementation - fastcall passes first two args in registers
-        // For now, we'll use cdecl as a fallback since fastcall isn't supported on all targets
-        // In a production implementation, this would require platform-specific assembly
-        self.call_cdecl(args)
+        // Use our assembly implementation to handle different calling conventions
+        ffi_asm::call_function(
+            self.info.address,
+            args,
+            &self.info.return_type,
+            &self.info.calling_convention,
+        )
     }
 
     /// Marshal native return value to Python object
     fn marshal_return_to_python(&self, py: Python, result: &u64) -> PyResult<PyObject> {
-        match self.info.return_type {
+        match &self.info.return_type {
+            NativeType::Int8 => {
+                let val = *result as i8;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
+            NativeType::Int16 => {
+                let val = *result as i16;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
             NativeType::Int32 => {
                 let val = *result as i32;
                 Ok(val.into_pyobject(py)?.into_any().unbind())
             }
             NativeType::Int64 => {
                 let val = *result as i64;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
+            NativeType::UInt8 => {
+                let val = *result as u8;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
+            NativeType::UInt16 => {
+                let val = *result as u16;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
+            NativeType::UInt32 => {
+                let val = *result as u32;
+                Ok(val.into_pyobject(py)?.into_any().unbind())
+            }
+            NativeType::UInt64 => {
+                let val = *result;
                 Ok(val.into_pyobject(py)?.into_any().unbind())
             }
             NativeType::Float32 => {
@@ -231,6 +243,17 @@ impl PyCallableFunction {
                         Ok(rust_str.into_pyobject(py)?.into_any().unbind())
                     }
                 }
+            }
+            NativeType::Struct(_struct_name) => {
+                // For structure returns, we need to create a structure pointer
+                // This requires access to the pointer manager, which we don't have here
+                // For now, just return the raw address and let the user create a pointer
+                let val = *result as usize;
+                
+                // Note: We can't access the logger from here easily
+                // This debug information will be handled by the caller if needed
+                
+                Ok(val.into_pyobject(py)?.into_any().unbind())
             }
             NativeType::Void => {
                 Ok(py.None())

@@ -20,3 +20,4 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_Kernel"
 ] }
 libc = "0.2"
+lazy_static = "1.5.0"
