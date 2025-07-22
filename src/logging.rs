@@ -1,5 +1,4 @@
 use crate::core::UniverseError;
-use pyo3::types::PyTracebackMethods;
 use std::fs::OpenOptions;
 use std::io::{Write, Seek, SeekFrom};
 use std::sync::Mutex;
@@ -8,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Logging system for the Universe framework
 pub struct Logger {
     log_file: Mutex<Option<std::fs::File>>,
-    log_path: String,
 }
 
 impl Logger {
@@ -35,7 +33,6 @@ impl Logger {
 
         Ok(Logger {
             log_file: Mutex::new(log_file),
-            log_path,
         })
     }
 
@@ -80,30 +77,6 @@ impl Logger {
         Ok(())
     }
 
-    /// Recreate the log file if it was lost or corrupted
-    pub fn recreate_log_file(&self) -> Result<(), UniverseError> {
-        if let Ok(mut file_guard) = self.log_file.lock() {
-            match OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&self.log_path)
-            {
-                Ok(file) => {
-                    *file_guard = Some(file);
-                    Ok(())
-                }
-                Err(e) => Err(UniverseError::SystemError(format!(
-                    "Failed to recreate log file: {}", e
-                )))
-            }
-        } else {
-            Err(UniverseError::SystemError(
-                "Failed to acquire log file mutex".to_string()
-            ))
-        }
-    }
-
     /// Log an error with additional context
     pub fn log_error(&self, error: &UniverseError) {
         self.log_with_level(error.severity(), &format!("[{}] {}", error.category(), error.context()));
@@ -112,69 +85,6 @@ impl Logger {
     /// Log an error with custom context
     pub fn log_error_with_context(&self, error: &UniverseError, context: &str) {
         self.log_with_level(error.severity(), &format!("[{}] {} (Context: {})", error.category(), error.context(), context));
-    }
-
-    /// Log a Python exception with full traceback
-    pub fn log_python_exception(&self, py_err: &pyo3::PyErr) {
-        pyo3::Python::with_gil(|py| {
-            let traceback = py_err.traceback(py);
-            let exception_str = py_err.to_string();
-            
-            if let Some(tb) = traceback {
-                if let Ok(tb_str) = tb.format() {
-                    self.log_with_level("ERROR", &format!("[PYTHON] Exception with traceback:\n{}\n{}", exception_str, tb_str));
-                } else {
-                    self.log_with_level("ERROR", &format!("[PYTHON] Exception: {}", exception_str));
-                }
-            } else {
-                self.log_with_level("ERROR", &format!("[PYTHON] Exception: {}", exception_str));
-            }
-        });
-    }
-
-    /// Log a system operation with timing
-    pub fn log_operation<T, F>(&self, operation_name: &str, operation: F) -> T
-    where
-        F: FnOnce() -> T,
-    {
-        let start_time = std::time::Instant::now();
-        self.log_debug(&format!("Starting operation: {}", operation_name));
-        
-        let result = operation();
-        
-        let duration = start_time.elapsed();
-        self.log_debug(&format!("Completed operation: {} (took {:?})", operation_name, duration));
-        
-        result
-    }
-
-    /// Log a system operation with error handling
-    pub fn log_operation_with_error<T, E, F>(&self, operation_name: &str, operation: F) -> Result<T, E>
-    where
-        F: FnOnce() -> Result<T, E>,
-        E: std::fmt::Display,
-    {
-        let start_time = std::time::Instant::now();
-        self.log_debug(&format!("Starting operation: {}", operation_name));
-        
-        let result = operation();
-        
-        let duration = start_time.elapsed();
-        match &result {
-            Ok(_) => {
-                self.log_debug(&format!("Completed operation: {} (took {:?})", operation_name, duration));
-            }
-            Err(e) => {
-                self.log_with_level("ERROR", &format!("Failed operation: {} (took {:?}): {}", operation_name, duration, e));
-            }
-        }
-        
-        result
-    }
-
-    /// Log a warning message
-    pub fn log_warning(&self, message: &str) {
-        self.log_with_level("WARN", message);
     }
 
     /// Log an info message

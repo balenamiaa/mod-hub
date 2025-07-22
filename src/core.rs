@@ -1,10 +1,7 @@
-use crate::ffi::FFIBridge;
 use crate::hooks::HookManager;
 use crate::logging::Logger;
 use crate::memory::MemoryManager;
-use crate::pointers::PointerManager;
 use crate::python_runtime::PyO3Runtime;
-use crate::registers::RegisterManager;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -22,10 +19,6 @@ pub enum UniverseError {
     MemoryError(String),
     HookError(String),
     SystemError(String),
-    FFIError(String),
-    RegisterError(String),
-    PointerError(String),
-    LoggingError(String),
 }
 
 impl std::fmt::Display for UniverseError {
@@ -36,10 +29,6 @@ impl std::fmt::Display for UniverseError {
             UniverseError::MemoryError(msg) => write!(f, "Memory error: {}", msg),
             UniverseError::HookError(msg) => write!(f, "Hook error: {}", msg),
             UniverseError::SystemError(msg) => write!(f, "System error: {}", msg),
-            UniverseError::FFIError(msg) => write!(f, "FFI error: {}", msg),
-            UniverseError::RegisterError(msg) => write!(f, "Register error: {}", msg),
-            UniverseError::PointerError(msg) => write!(f, "Pointer error: {}", msg),
-            UniverseError::LoggingError(msg) => write!(f, "Logging error: {}", msg),
         }
     }
 }
@@ -55,10 +44,6 @@ impl UniverseError {
             UniverseError::MemoryError(_) => true,
             UniverseError::HookError(_) => true,
             UniverseError::SystemError(_) => false,
-            UniverseError::FFIError(_) => true,
-            UniverseError::RegisterError(_) => true,
-            UniverseError::PointerError(_) => true,
-            UniverseError::LoggingError(_) => true,
         }
     }
 
@@ -70,10 +55,6 @@ impl UniverseError {
             UniverseError::MemoryError(_) => "MEMORY",
             UniverseError::HookError(_) => "HOOK",
             UniverseError::SystemError(_) => "SYSTEM",
-            UniverseError::FFIError(_) => "FFI",
-            UniverseError::RegisterError(_) => "REGISTER",
-            UniverseError::PointerError(_) => "POINTER",
-            UniverseError::LoggingError(_) => "LOGGING",
         }
     }
 
@@ -85,25 +66,19 @@ impl UniverseError {
             UniverseError::MemoryError(_) => "ERROR",
             UniverseError::HookError(_) => "ERROR",
             UniverseError::SystemError(_) => "CRITICAL",
-            UniverseError::FFIError(_) => "ERROR",
-            UniverseError::RegisterError(_) => "ERROR",
-            UniverseError::PointerError(_) => "ERROR",
-            UniverseError::LoggingError(_) => "WARN",
         }
     }
 
     /// Get detailed error context for debugging
     pub fn context(&self) -> String {
         match self {
-            UniverseError::InitializationFailed(msg) => format!("During framework initialization: {}", msg),
+            UniverseError::InitializationFailed(msg) => {
+                format!("During framework initialization: {}", msg)
+            }
             UniverseError::PythonError(msg) => format!("In Python runtime: {}", msg),
             UniverseError::MemoryError(msg) => format!("During memory operation: {}", msg),
             UniverseError::HookError(msg) => format!("In hook system: {}", msg),
             UniverseError::SystemError(msg) => format!("System-level error: {}", msg),
-            UniverseError::FFIError(msg) => format!("In FFI bridge: {}", msg),
-            UniverseError::RegisterError(msg) => format!("In register system: {}", msg),
-            UniverseError::PointerError(msg) => format!("In pointer system: {}", msg),
-            UniverseError::LoggingError(msg) => format!("In logging system: {}", msg),
         }
     }
 
@@ -111,40 +86,15 @@ impl UniverseError {
     pub fn to_python_exception(&self) -> pyo3::PyErr {
         use pyo3::exceptions::*;
         match self {
-            UniverseError::InitializationFailed(msg) => PyRuntimeError::new_err(format!("Initialization failed: {}", msg)),
+            UniverseError::InitializationFailed(msg) => {
+                PyRuntimeError::new_err(format!("Initialization failed: {}", msg))
+            }
             UniverseError::PythonError(msg) => PyRuntimeError::new_err(msg.clone()),
             UniverseError::MemoryError(msg) => PyMemoryError::new_err(msg.clone()),
-            UniverseError::HookError(msg) => PyRuntimeError::new_err(format!("Hook error: {}", msg)),
+            UniverseError::HookError(msg) => {
+                PyRuntimeError::new_err(format!("Hook error: {}", msg))
+            }
             UniverseError::SystemError(msg) => PySystemError::new_err(msg.clone()),
-            UniverseError::FFIError(msg) => PyRuntimeError::new_err(format!("FFI error: {}", msg)),
-            UniverseError::RegisterError(msg) => PyRuntimeError::new_err(format!("Register error: {}", msg)),
-            UniverseError::PointerError(msg) => PyRuntimeError::new_err(format!("Pointer error: {}", msg)),
-            UniverseError::LoggingError(msg) => PyRuntimeError::new_err(format!("Logging error: {}", msg)),
-        }
-    }
-
-    /// Create an error from a PyO3 error
-    pub fn from_python_error(py_err: pyo3::PyErr) -> Self {
-        UniverseError::PythonError(format!("Python error: {}", py_err))
-    }
-
-    /// Create an error from a Windows system error
-    pub fn from_windows_error(error_code: u32, context: &str) -> Self {
-        UniverseError::SystemError(format!("{}: Windows error code {}", context, error_code))
-    }
-
-    /// Create an error with additional context
-    pub fn with_context(self, context: &str) -> Self {
-        match self {
-            UniverseError::InitializationFailed(msg) => UniverseError::InitializationFailed(format!("{}: {}", context, msg)),
-            UniverseError::PythonError(msg) => UniverseError::PythonError(format!("{}: {}", context, msg)),
-            UniverseError::MemoryError(msg) => UniverseError::MemoryError(format!("{}: {}", context, msg)),
-            UniverseError::HookError(msg) => UniverseError::HookError(format!("{}: {}", context, msg)),
-            UniverseError::SystemError(msg) => UniverseError::SystemError(format!("{}: {}", context, msg)),
-            UniverseError::FFIError(msg) => UniverseError::FFIError(format!("{}: {}", context, msg)),
-            UniverseError::RegisterError(msg) => UniverseError::RegisterError(format!("{}: {}", context, msg)),
-            UniverseError::PointerError(msg) => UniverseError::PointerError(format!("{}: {}", context, msg)),
-            UniverseError::LoggingError(msg) => UniverseError::LoggingError(format!("{}: {}", context, msg)),
         }
     }
 }
@@ -154,13 +104,13 @@ pub struct UniverseCore {
     python_runtime: Option<PyO3Runtime>,
     hook_manager: Option<HookManager>,
     memory_manager: Option<Arc<Mutex<MemoryManager>>>,
-    ffi_bridge: Option<FFIBridge>,
-    register_manager: RegisterManager,
-    pointer_manager: Option<PointerManager>,
     logger: Arc<Logger>,
     hot_reload_thread: Option<thread::JoinHandle<()>>,
     shutdown_flag: Arc<Mutex<bool>>,
 }
+
+unsafe impl Send for UniverseCore {}
+unsafe impl Sync for UniverseCore {}
 
 impl UniverseCore {
     /// Get a shared reference to the memory manager
@@ -168,44 +118,9 @@ impl UniverseCore {
         self.memory_manager.as_ref().cloned()
     }
 
-    /// Get a reference to the hook manager
-    pub fn hook_manager(&self) -> Option<&HookManager> {
-        self.hook_manager.as_ref()
-    }
-
     /// Get a mutable reference to the hook manager
     pub fn hook_manager_mut(&mut self) -> Option<&mut HookManager> {
         self.hook_manager.as_mut()
-    }
-
-    /// Get a reference to the FFI bridge
-    pub fn ffi_bridge(&self) -> Option<&FFIBridge> {
-        self.ffi_bridge.as_ref()
-    }
-
-    /// Get a mutable reference to the FFI bridge
-    pub fn ffi_bridge_mut(&mut self) -> Option<&mut FFIBridge> {
-        self.ffi_bridge.as_mut()
-    }
-
-    /// Get a reference to the register manager
-    pub fn register_manager(&self) -> &RegisterManager {
-        &self.register_manager
-    }
-
-    /// Get a mutable reference to the register manager
-    pub fn register_manager_mut(&mut self) -> &mut RegisterManager {
-        &mut self.register_manager
-    }
-
-    /// Get a reference to the pointer manager
-    pub fn pointer_manager(&self) -> Option<&PointerManager> {
-        self.pointer_manager.as_ref()
-    }
-
-    /// Get a mutable reference to the pointer manager
-    pub fn pointer_manager_mut(&mut self) -> Option<&mut PointerManager> {
-        self.pointer_manager.as_mut()
     }
 
     /// Get a reference to the logger
@@ -223,7 +138,10 @@ impl UniverseCore {
         // Initialize logger reference in hook handlers
         let logger_arc = Arc::new(logger);
         crate::hook_handlers::initialize_logger(Arc::clone(&logger_arc)).map_err(|e| {
-            UniverseError::InitializationFailed(format!("Failed to initialize hook handlers logger: {}", e))
+            UniverseError::InitializationFailed(format!(
+                "Failed to initialize hook handlers logger: {}",
+                e
+            ))
         })?;
 
         logger_arc.log("Initializing Universe framework...");
@@ -249,21 +167,6 @@ impl UniverseCore {
                 "Hook manager initialization failed: {}",
                 e
             ))
-        })?;
-
-        // Initialize register manager
-        logger_arc.log("Initializing register manager...");
-        let register_manager = RegisterManager::new();
-
-        // Initialize pointer manager
-        logger_arc.log("Initializing pointer manager...");
-        let pointer_manager = PointerManager::new(Arc::clone(&shared_memory_manager));
-
-        // Initialize FFI bridge
-        logger_arc.log("Initializing FFI bridge...");
-        let ffi_bridge = FFIBridge::new().map_err(|e| {
-            logger_arc.log(&format!("Failed to initialize FFI bridge: {}", e));
-            UniverseError::InitializationFailed(format!("FFI bridge initialization failed: {}", e))
         })?;
 
         // Initialize Python runtime
@@ -303,9 +206,6 @@ impl UniverseCore {
             python_runtime: Some(python_runtime),
             hook_manager: Some(hook_manager),
             memory_manager: Some(shared_memory_manager),
-            ffi_bridge: Some(ffi_bridge),
-            register_manager,
-            pointer_manager: Some(pointer_manager),
             logger: logger_arc,
             hot_reload_thread: None,
             shutdown_flag: Arc::clone(&shutdown_flag),
@@ -353,13 +253,17 @@ impl UniverseCore {
                 match self.handle_recoverable_error(&e) {
                     Ok(()) => Ok(()),
                     Err(recovery_error) => {
-                        self.logger.log_critical(&format!("Failed to recover from error: {}", recovery_error));
+                        self.logger.log_critical(&format!(
+                            "Failed to recover from error: {}",
+                            recovery_error
+                        ));
                         Err(recovery_error)
                     }
                 }
             }
             Err(e) => {
-                self.logger.log_critical(&format!("Non-recoverable error during tick: {}", e));
+                self.logger
+                    .log_critical(&format!("Non-recoverable error during tick: {}", e));
                 Err(e)
             }
         }
@@ -478,48 +382,60 @@ impl UniverseCore {
     pub fn handle_recoverable_error(&mut self, error: &UniverseError) -> Result<(), UniverseError> {
         match error {
             UniverseError::PythonError(_) => {
-                self.logger.log_recoverable_error(error, "Attempting to reinitialize Python runtime");
+                self.logger
+                    .log_recoverable_error(error, "Attempting to reinitialize Python runtime");
                 // Try to reinitialize Python runtime
                 match PyO3Runtime::new() {
                     Ok(new_runtime) => {
                         self.python_runtime = Some(new_runtime);
-                        self.logger.log_info("Python runtime successfully reinitialized");
+                        self.logger
+                            .log_info("Python runtime successfully reinitialized");
                         Ok(())
                     }
                     Err(e) => {
-                        self.logger.log_error_with_context(&e, "Failed to reinitialize Python runtime");
+                        self.logger
+                            .log_error_with_context(&e, "Failed to reinitialize Python runtime");
                         Err(e)
                     }
                 }
             }
             UniverseError::MemoryError(_) => {
-                self.logger.log_recoverable_error(error, "Refreshing memory manager module list");
+                self.logger
+                    .log_recoverable_error(error, "Refreshing memory manager module list");
                 // Try to refresh memory manager modules
                 if let Some(ref memory_manager) = self.memory_manager {
                     if let Ok(mut manager) = memory_manager.lock() {
                         match manager.refresh_modules() {
                             Ok(()) => {
-                                self.logger.log_info("Memory manager modules refreshed successfully");
+                                self.logger
+                                    .log_info("Memory manager modules refreshed successfully");
                                 Ok(())
                             }
                             Err(e) => {
-                                self.logger.log_error_with_context(&e, "Failed to refresh memory manager modules");
+                                self.logger.log_error_with_context(
+                                    &e,
+                                    "Failed to refresh memory manager modules",
+                                );
                                 Err(e)
                             }
                         }
                     } else {
-                        let err = UniverseError::SystemError("Failed to acquire memory manager lock".to_string());
+                        let err = UniverseError::SystemError(
+                            "Failed to acquire memory manager lock".to_string(),
+                        );
                         self.logger.log_error(&err);
                         Err(err)
                     }
                 } else {
-                    let err = UniverseError::SystemError("Memory manager not available".to_string());
+                    let err =
+                        UniverseError::SystemError("Memory manager not available".to_string());
                     self.logger.log_error(&err);
                     Err(err)
                 }
             }
             UniverseError::HookError(_) => {
-                self.logger.log_recoverable_error(error, "Clearing all hooks and resetting hook manager");
+                self.logger
+                    .log_recoverable_error(error, "Clearing all hooks and resetting hook manager");
                 // Try to clear all hooks and reset
                 if let Some(ref mut hook_manager) = self.hook_manager {
                     match hook_manager.remove_all_hooks() {
@@ -528,7 +444,10 @@ impl UniverseCore {
                             Ok(())
                         }
                         Err(e) => {
-                            self.logger.log_error_with_context(&e, "Failed to clear hooks during recovery");
+                            self.logger.log_error_with_context(
+                                &e,
+                                "Failed to clear hooks during recovery",
+                            );
                             Err(e)
                         }
                     }
@@ -540,7 +459,8 @@ impl UniverseCore {
             }
             _ => {
                 // For other error types, just log and continue
-                self.logger.log_recoverable_error(error, "No specific recovery action available");
+                self.logger
+                    .log_recoverable_error(error, "No specific recovery action available");
                 Ok(())
             }
         }

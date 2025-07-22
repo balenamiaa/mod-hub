@@ -9,16 +9,12 @@ use windows_sys::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS
 
 // Core modules for the Universe framework
 mod core;
-mod ffi;
-mod ffi_asm;
-mod hooks;
 mod hook_handlers;
+mod hooks;
 mod logging;
 mod memory;
-mod pointers;
 mod python_interface;
 mod python_runtime;
-mod registers;
 
 use core::UniverseCore;
 
@@ -39,7 +35,10 @@ fn main_thread() -> ! {
             // Initialize the global core reference in python_interface
             if let Err(e) = python_interface::initialize_core_reference(Arc::clone(&core_arc)) {
                 if let Ok(guard) = core_arc.lock() {
-                    guard.logger().log_error_with_context(&e, "Failed to initialize python interface core reference");
+                    guard.logger().log_error_with_context(
+                        &e,
+                        "Failed to initialize python interface core reference",
+                    );
                 }
             }
 
@@ -70,7 +69,10 @@ fn main_thread() -> ! {
                                 Err(e) => {
                                     // Can't log to universe.log since we can't access the core
                                     // Fall back to stderr for this critical error
-                                    let error_msg = format!("CRITICAL: Failed to create second core instance: {:?}\n", e);
+                                    let error_msg = format!(
+                                        "CRITICAL: Failed to create second core instance: {:?}\n",
+                                        e
+                                    );
                                     let _ = std::io::stderr().write_all(error_msg.as_bytes());
                                 }
                             }
@@ -80,7 +82,9 @@ fn main_thread() -> ! {
                 Err(_) => {
                     // Can't log to universe.log since we can't access the core
                     // Fall back to stderr for this critical error
-                    let _ = std::io::stderr().write_all(b"CRITICAL: Failed to acquire Universe core mutex during initialization\n");
+                    let _ = std::io::stderr().write_all(
+                        b"CRITICAL: Failed to acquire Universe core mutex during initialization\n",
+                    );
                 }
             }
         }
@@ -97,9 +101,11 @@ fn main_thread() -> ! {
             if let Some(core) = guard.as_mut() {
                 if let Err(e) = core.tick() {
                     if e.is_recoverable() {
-                        core.logger().log_recoverable_error(&e, "Continuing operation");
+                        core.logger()
+                            .log_recoverable_error(&e, "Continuing operation");
                     } else {
-                        core.logger().log_critical(&format!("Non-recoverable error during tick: {}", e));
+                        core.logger()
+                            .log_critical(&format!("Non-recoverable error during tick: {}", e));
                     }
                 }
             }
@@ -128,14 +134,17 @@ pub extern "system" fn DllMain(
                 Ok(mut guard) => {
                     if let Some(mut core) = guard.take() {
                         if let Err(e) = core.shutdown() {
-                            core.logger().log_error_with_context(&e, "Error during Universe shutdown");
+                            core.logger()
+                                .log_error_with_context(&e, "Error during Universe shutdown");
                         }
                     }
                 }
                 Err(_) => {
                     // Can't log to universe.log since we can't access the core
                     // Fall back to stderr for this critical error
-                    let _ = std::io::stderr().write_all(b"CRITICAL: Failed to acquire Universe core mutex during shutdown\n");
+                    let _ = std::io::stderr().write_all(
+                        b"CRITICAL: Failed to acquire Universe core mutex during shutdown\n",
+                    );
                 }
             }
 
@@ -153,6 +162,5 @@ pub extern "system" fn DllMain(
 /// This is the main entry point for the universe Python module
 #[pymodule]
 fn universe(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Delegate to the python_interface module for complete API registration
-    python_interface::universe(m)
+    python_interface::register_module_contents(m)
 }
