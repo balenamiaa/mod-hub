@@ -188,6 +188,9 @@ impl OverlayBuilder {
             }
         }
 
+        unsafe { DestroyWindow(hwnd); }
+        unsafe { CoUninitialize(); }
+
         Ok(())
     }
 }
@@ -248,13 +251,7 @@ impl InputCollector {
         self.screen_h = h;
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::new(0.0, 0.0), egui::vec2(w, h));
         let events = std::mem::take(&mut self.events);
-        egui::RawInput {
-            screen_rect: Some(screen_rect),
-            time: Some(now.elapsed().as_secs_f64()),
-            max_texture_side: Some(8192),
-            events,
-            ..Default::default()
-        }
+        egui::RawInput { screen_rect: Some(screen_rect), time: Some(now.elapsed().as_secs_f64()), max_texture_side: Some(8192), events, ..Default::default() }
     }
     fn on_message(&mut self, msg: &MSG) {
         match msg.message {

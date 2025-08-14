@@ -3,6 +3,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
@@ -27,7 +28,7 @@ pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND, String> {
     let wtitle = wide_null(title);
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW,
             class,
             PCWSTR(wtitle.as_ptr()),
             WS_POPUP,
@@ -37,7 +38,9 @@ pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND, String> {
             0,
             None,
             None,
-            GetModuleHandleW(None).ok().map(|m| windows::Win32::Foundation::HINSTANCE(m.0)),
+            GetModuleHandleW(None)
+                .ok()
+                .map(|m| windows::Win32::Foundation::HINSTANCE(m.0)),
             None,
         )
     }
@@ -55,10 +58,29 @@ pub fn create_overlay_window(
 ) -> Result<HWND, String> {
     let wtitle = wide_null(title);
     let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST;
-    if !hide_alt_tab { ex |= WS_EX_APPWINDOW; }
+    if !hide_alt_tab {
+        ex |= WS_EX_APPWINDOW;
+    }
     let parent = if hide_alt_tab { Some(owner) } else { None };
-    let hwnd = unsafe { CreateWindowExW(ex, class, PCWSTR(wtitle.as_ptr()), WS_POPUP, 0, 0, width, height, parent, None, GetModuleHandleW(None).ok().map(|m| windows::Win32::Foundation::HINSTANCE(m.0)), None) }
-        .map_err(|e| format!("CreateWindowExW overlay: {e}"))?;
+    let hwnd = unsafe {
+        CreateWindowExW(
+            ex,
+            class,
+            PCWSTR(wtitle.as_ptr()),
+            WS_POPUP,
+            0,
+            0,
+            width,
+            height,
+            parent,
+            None,
+            GetModuleHandleW(None)
+                .ok()
+                .map(|m| windows::Win32::Foundation::HINSTANCE(m.0)),
+            None,
+        )
+    }
+    .map_err(|e| format!("CreateWindowExW overlay: {e}"))?;
 
     unsafe {
         if hide_alt_tab {
@@ -82,7 +104,12 @@ pub fn create_overlay_window(
     }
 
     unsafe {
-        let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
+        let _ = SetLayeredWindowAttributes(
+            hwnd,
+            windows::Win32::Foundation::COLORREF(0),
+            255,
+            LWA_ALPHA,
+        );
         let margins = MARGINS {
             cxLeftWidth: -1,
             cxRightWidth: -1,
@@ -142,12 +169,22 @@ pub fn set_click_through(hwnd: HWND, enabled: bool) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         );
+        if !enabled {
+            SetForegroundWindow(hwnd);
+            SetActiveWindow(hwnd);
+            SetFocus(Some(hwnd));
+        }
     }
 }
 
 pub fn apply_transparency(hwnd: HWND) {
     unsafe {
-        let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
+        let _ = SetLayeredWindowAttributes(
+            hwnd,
+            windows::Win32::Foundation::COLORREF(0),
+            255,
+            LWA_ALPHA,
+        );
         let margins = MARGINS {
             cxLeftWidth: -1,
             cxRightWidth: -1,
@@ -160,6 +197,10 @@ pub fn apply_transparency(hwnd: HWND) {
 
 extern "system" fn def_wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_SETCURSOR => unsafe {
+            SetCursor(LoadCursorW(None, IDC_ARROW).ok());
+            LRESULT(1)
+        },
         WM_DESTROY => unsafe {
             PostQuitMessage(0);
             LRESULT(0)
