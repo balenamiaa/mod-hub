@@ -3,7 +3,7 @@
 
 use core::ffi::c_void;
 use std::ptr::null_mut;
-use windows::Win32::Foundation::{HINSTANCE, HWND};
+use windows::Win32::Foundation::{HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10, VK_INSERT};
 use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrA};
@@ -12,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_OK, MessageBoxA};
 pub type ThreadFunc = unsafe extern "system" fn(lp_parameter: *mut c_void) -> u32;
 
 pub fn disable_thread_library_calls(module: HINSTANCE) -> bool {
-    unsafe { DisableThreadLibraryCalls(module) != 0 }
+    unsafe { DisableThreadLibraryCalls(HMODULE(module.0)).is_ok() }
 }
 
 pub fn spawn_thread(_func: ThreadFunc, _param: *mut c_void) -> Option<*mut c_void> {
@@ -35,7 +35,13 @@ pub fn message_box(title: &str, text: &str) {
     let title = to_c(title);
     let text = to_c(text);
     unsafe {
-        MessageBoxA(Some(HWND(null_mut())), text.as_ptr(), title.as_ptr(), MB_OK);
+        use windows::core::PCSTR;
+        MessageBoxA(
+            Some(HWND(null_mut())),
+            PCSTR(text.as_ptr()),
+            PCSTR(title.as_ptr()),
+            MB_OK,
+        );
     }
 }
 
@@ -59,7 +65,7 @@ pub fn debug_log(msg: &str) {
 
 #[cfg(target_os = "windows")]
 pub fn hwnd_exstyle_hex(hwnd: isize) -> String {
-    unsafe { format!("0x{:016x}", GetWindowLongPtrA(hwnd.0, GWL_EXSTYLE)) }
+    unsafe { format!("0x{:016x}", GetWindowLongPtrA(HWND(hwnd as *mut _), GWL_EXSTYLE)) }
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -21,6 +21,9 @@
 //! # Ok(())
 //! # }
 //! ```
+
+use crate::winapi::IntoHinstance;
+
 pub mod analysis;
 pub mod config;
 pub mod errors;
@@ -100,7 +103,7 @@ fn stop_runtime() {
 fn try_start_system(hinst_dll: isize) -> bool {
     match RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) => {
-            winapi::disable_thread_library_calls(hinst_dll as _);
+            winapi::disable_thread_library_calls(hinst_dll.into_hinstance());
             start_hooks();
             start_runtime();
             true

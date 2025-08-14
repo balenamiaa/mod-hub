@@ -1,27 +1,17 @@
 use crate::errors::{Error, Result};
 use crate::winapi;
-use core::ffi::c_void;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::mem::MaybeUninit;
-use std::ptr::{null, null_mut};
-use std::rc::Rc;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::Graphics::Gdi::*;
+use std::ptr::null_mut;
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::System::Com::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
 
-// Helper macros for extracting coordinates from LPARAM
-fn GET_X_LPARAM(lp: LPARAM) -> i16 {
+fn get_x_lparam(lp: LPARAM) -> i16 {
     (lp.0 & 0xFFFF) as i16
 }
 
-fn GET_Y_LPARAM(lp: LPARAM) -> i16 {
+fn get_y_lparam(lp: LPARAM) -> i16 {
     ((lp.0 >> 16) & 0xFFFF) as i16
 }
 
@@ -53,7 +43,7 @@ impl Default for OverlayBuilder {
             width: unsafe { GetSystemMetrics(SM_CXSCREEN) },
             height: unsafe { GetSystemMetrics(SM_CYSCREEN) },
             click_through_on_start: true,
-            toggle_vk: VK_INSERT as i32,
+            toggle_vk: VK_INSERT.0 as i32,
         }
     }
 }
@@ -90,14 +80,17 @@ impl OverlayBuilder {
                 .ok()
                 .map_err(|e| Error::Run(format!("CoInitializeEx: {e}")))?;
         }
+        winapi::debug_log("overlay: COM initialized");
 
         let class =
             win::register_window_class("restident_overlay_wnd").map_err(|e| Error::Create(e))?;
         let owner_class =
             win::register_window_class("restident_overlay_owner").map_err(|e| Error::Create(e))?;
+        winapi::debug_log("overlay: window classes registered");
 
         let owner =
             win::create_owner_window(owner_class, &self.title).map_err(|e| Error::Create(e))?;
+        winapi::debug_log(&format!("overlay: owner hwnd=0x{:x}", owner.0 as usize));
 
         let hwnd = win::create_overlay_window(
             class,
@@ -108,6 +101,7 @@ impl OverlayBuilder {
             self.hide_from_alt_tab,
         )
         .map_err(|e| Error::Create(e))?;
+        winapi::debug_log(&format!("overlay: overlay hwnd=0x{:x}", hwnd.0 as usize));
 
         let mut rect = RECT::default();
         unsafe { GetClientRect(hwnd, &mut rect) };
@@ -115,8 +109,10 @@ impl OverlayBuilder {
         let height = (rect.bottom - rect.top).max(1) as u32;
 
         let mut d3d = d3d::D3D::new(width, height).map_err(|e| Error::Create(e))?;
+        winapi::debug_log(&format!("overlay: d3d initialized {}x{}", width, height));
         let mut comp = dcomp::Composition::new(hwnd, &d3d).map_err(|e| Error::Create(e))?;
         comp.bind_swap_chain(&d3d).map_err(|e| Error::Create(e))?;
+        winapi::debug_log("overlay: composition bound to swapchain");
 
         win::apply_transparency(hwnd);
         win::set_topmost(hwnd);
@@ -126,6 +122,7 @@ impl OverlayBuilder {
             win::set_click_through(hwnd, false);
         }
         win::show_no_activate(hwnd);
+        winapi::debug_log("overlay: window shown (no activate, topmost)");
 
         let egui_ctx = egui::Context::default();
         let mut input = InputCollector::new(hwnd);
@@ -134,22 +131,38 @@ impl OverlayBuilder {
         let mut click_through = self.click_through_on_start;
         let mut prev_toggle = false;
 
+        let mut last_log = std::time::Instant::now();
+        let start_time = std::time::Instant::now();
         loop {
             if !drain_messages(hwnd, &mut input) {
                 break;
             }
 
-            let now = std::time::Instant::now();
-            let raw = input.build_raw(width as f32, height as f32, now);
+            let raw = input.build_raw(width as f32, height as f32, start_time);
             egui_ctx.begin_pass(raw);
             app.ui(&egui_ctx);
             let out = egui_ctx.end_pass();
-            let clipped = egui_ctx.tessellate(out.shapes, egui_ctx.pixels_per_point());
+            let clipped = egui_ctx.tessellate(out.shapes.clone(), egui_ctx.pixels_per_point());
+            winapi::debug_log(&format!(
+                "overlay: shapes={} clipped={} tex_set={} tex_free={}",
+                out.shapes.len(),
+                clipped.len(),
+                out.textures_delta.set.len(),
+                out.textures_delta.free.len()
+            ));
 
-            painter.update_textures(&out.textures_delta)?;
+            painter
+                .update_textures(&out.textures_delta)
+                .map_err(|e| Error::Run(e))?;
             d3d.begin_frame();
-            painter.paint(width, height, &clipped)?;
+            painter
+                .paint(width, height, &clipped)
+                .map_err(|e| Error::Run(e))?;
             d3d.present();
+            if last_log.elapsed().as_secs_f32() > 1.0 {
+                winapi::debug_log("overlay: frame");
+                last_log = std::time::Instant::now();
+            }
 
             let down = winapi::is_vk_pressed(self.toggle_vk);
             if down && !prev_toggle {
@@ -158,12 +171,20 @@ impl OverlayBuilder {
             }
             prev_toggle = down;
 
+            if crate::SHUTDOWN.load(core::sync::atomic::Ordering::SeqCst) || winapi::is_f10_pressed() {
+                unsafe { PostQuitMessage(0) };
+                break;
+            }
+
             if resize_if_needed(hwnd, &mut d3d, &mut painter) {
                 let mut r = RECT::default();
                 unsafe { GetClientRect(hwnd, &mut r) };
                 let w = (r.right - r.left).max(1) as u32;
                 let h = (r.bottom - r.top).max(1) as u32;
                 input.set_screen(w as f32, h as f32);
+            }
+            unsafe {
+                windows::Win32::System::Threading::Sleep(16);
             }
         }
 
@@ -174,8 +195,8 @@ impl OverlayBuilder {
 fn drain_messages(hwnd: HWND, input: &mut InputCollector) -> bool {
     unsafe {
         let mut msg = MaybeUninit::<MSG>::zeroed();
-        while PeekMessageW(msg.as_mut_ptr(), Some(hwnd), 0, 0, PM_REMOVE).as_bool() {
-            let mut m = msg.assume_init();
+        while PeekMessageW(msg.as_mut_ptr(), Some(HWND(null_mut())), 0, 0, PM_REMOVE).as_bool() {
+            let m = msg.assume_init();
             if m.message == WM_QUIT {
                 return false;
             }
@@ -229,7 +250,6 @@ impl InputCollector {
         let events = std::mem::take(&mut self.events);
         egui::RawInput {
             screen_rect: Some(screen_rect),
-            pixels_per_point: Some(1.0),
             time: Some(now.elapsed().as_secs_f64()),
             max_texture_side: Some(8192),
             events,
@@ -239,8 +259,8 @@ impl InputCollector {
     fn on_message(&mut self, msg: &MSG) {
         match msg.message {
             WM_MOUSEMOVE => {
-                let x = GET_X_LPARAM(msg.lParam) as i32 as f32;
-                let y = GET_Y_LPARAM(msg.lParam) as i32 as f32;
+                let x = get_x_lparam(msg.lParam) as i32 as f32;
+                let y = get_y_lparam(msg.lParam) as i32 as f32;
                 self.events
                     .push(egui::Event::PointerMoved(egui::pos2(x, y)));
             }
@@ -269,14 +289,22 @@ impl InputCollector {
                 modifiers: self.modifiers,
             }),
             WM_MOUSEWHEEL => {
-                let delta = (HIWORD(msg.wParam.0 as u32) as i16) as f32 / WHEEL_DELTA as f32;
-                self.events
-                    .push(egui::Event::Scroll(egui::vec2(0.0, -delta * 48.0)));
+                let delta =
+                    ((msg.wParam.0 as u32 >> 16) & 0xFFFF) as i16 as f32 / WHEEL_DELTA as f32;
+                self.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -delta * 48.0),
+                    modifiers: self.modifiers,
+                });
             }
             WM_MOUSEHWHEEL => {
-                let delta = (HIWORD(msg.wParam.0 as u32) as i16) as f32 / WHEEL_DELTA as f32;
-                self.events
-                    .push(egui::Event::Scroll(egui::vec2(delta * 48.0, 0.0)));
+                let delta =
+                    ((msg.wParam.0 as u32 >> 16) & 0xFFFF) as i16 as f32 / WHEEL_DELTA as f32;
+                self.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(delta * 48.0, 0.0),
+                    modifiers: self.modifiers,
+                });
             }
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 self.update_modifiers();
@@ -346,7 +374,7 @@ fn vk_to_key(vk: u32) -> Option<egui::Key> {
 
 fn pos_from_lparam(lp: LPARAM) -> egui::Pos2 {
     egui::pos2(
-        GET_X_LPARAM(lp) as i32 as f32,
-        GET_Y_LPARAM(lp) as i32 as f32,
+        get_x_lparam(lp) as i32 as f32,
+        get_y_lparam(lp) as i32 as f32,
     )
 }

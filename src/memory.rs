@@ -10,13 +10,14 @@ use std::ptr::null_mut;
 use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::System::Memory::{
-    VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_FREE, MEM_RESERVE,
-    PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
-    PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+    MEM_COMMIT, MEM_FREE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ,
+    PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
+    PAGE_READONLY, PAGE_READWRITE, PAGE_TYPE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE,
+    VirtualQueryEx,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_ALL_ACCESS};
 
-use crate::pattern::{Pattern, PatternScanner, PatternError};
+use crate::pattern::{Pattern, PatternError, PatternScanner};
 use crate::vtable::{VTable, VTableScanner};
 
 /// Memory region information.
@@ -105,6 +106,22 @@ impl From<u32> for MemoryProtection {
     }
 }
 
+impl From<PAGE_PROTECTION_FLAGS> for MemoryProtection {
+    fn from(protection: PAGE_PROTECTION_FLAGS) -> Self {
+        match protection {
+            x if x.0 == PAGE_NOACCESS.0 as u32 => MemoryProtection::NoAccess,
+            x if x.0 == PAGE_READONLY.0 as u32 => MemoryProtection::ReadOnly,
+            x if x.0 == PAGE_READWRITE.0 as u32 => MemoryProtection::ReadWrite,
+            x if x.0 == PAGE_WRITECOPY.0 as u32 => MemoryProtection::WriteCopy,
+            x if x.0 == PAGE_EXECUTE.0 as u32 => MemoryProtection::Execute,
+            x if x.0 == PAGE_EXECUTE_READ.0 as u32 => MemoryProtection::ExecuteRead,
+            x if x.0 == PAGE_EXECUTE_READWRITE.0 as u32 => MemoryProtection::ExecuteReadWrite,
+            x if x.0 == PAGE_EXECUTE_WRITECOPY.0 as u32 => MemoryProtection::ExecuteWriteCopy,
+            _ => MemoryProtection::NoAccess,
+        }
+    }
+}
+
 impl fmt::Display for MemoryProtection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -165,6 +182,14 @@ pub enum MemoryError {
     PatternError(#[from] PatternError),
 }
 
+impl From<windows::core::Error> for MemoryError {
+    fn from(err: windows::core::Error) -> Self {
+        MemoryError::QueryFailed {
+            reason: err.to_string(),
+        }
+    }
+}
+
 /// Configuration for memory scanning operations.
 #[derive(Debug, Clone)]
 pub struct MemoryScanConfig {
@@ -211,7 +236,7 @@ impl MemoryScanner {
 
     /// Creates a new scanner for a specific process.
     pub fn for_process(process_handle: HANDLE) -> Result<Self, MemoryError> {
-        if process_handle == INVALID_HANDLE_VALUE || process_handle == null_mut() {
+        if process_handle == INVALID_HANDLE_VALUE || process_handle.0.is_null() {
             return Err(MemoryError::ProcessAccessFailed);
         }
 
@@ -225,7 +250,7 @@ impl MemoryScanner {
 
     /// Creates a scanner for a process ID.
     pub fn for_process_id(process_id: u32) -> Result<Self, MemoryError> {
-        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process_id) }?;
         Self::for_process(handle)
     }
 
@@ -244,18 +269,18 @@ impl MemoryScanner {
             let mut mbi = MEMORY_BASIC_INFORMATION {
                 BaseAddress: null_mut(),
                 AllocationBase: null_mut(),
-                AllocationProtect: 0,
+                AllocationProtect: PAGE_PROTECTION_FLAGS(0),
                 PartitionId: 0,
                 RegionSize: 0,
-                State: 0,
-                Protect: 0,
-                Type: 0,
+                State: VIRTUAL_ALLOCATION_TYPE(0),
+                Protect: PAGE_PROTECTION_FLAGS(0),
+                Type: PAGE_TYPE(0),
             };
 
             let result = unsafe {
                 VirtualQueryEx(
                     self.process_handle,
-                    address as *const _,
+                    Some(address as *const _),
                     &mut mbi,
                     std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
                 )
@@ -269,8 +294,8 @@ impl MemoryScanner {
                 regions.push(MemoryRegion {
                     base_address: mbi.BaseAddress as usize,
                     size: mbi.RegionSize,
-                    protection: MemoryProtection::from(mbi.Protect),
-                    state: MemoryState::from(mbi.State),
+                    protection: MemoryProtection::from(mbi.Protect.0),
+                    state: MemoryState::from(mbi.State.0),
                     region_type: MemoryType::Private, // Simplified
                 });
             }
@@ -292,11 +317,11 @@ impl MemoryScanner {
                 address as *const _,
                 buffer.as_mut_ptr() as *mut _,
                 size,
-                &mut bytes_read,
+                Some(&mut bytes_read),
             )
         };
 
-        if success == 0 || bytes_read != size {
+        if success.is_err() || bytes_read != size {
             return Err(MemoryError::ReadFailed {
                 address,
                 reason: "ReadProcessMemory failed".to_string(),
@@ -316,11 +341,11 @@ impl MemoryScanner {
                 address as *mut _,
                 data.as_ptr() as *const _,
                 data.len(),
-                &mut bytes_written,
+                Some(&mut bytes_written),
             )
         };
 
-        if success == 0 || bytes_written != data.len() {
+        if success.is_err() || bytes_written != data.len() {
             return Err(MemoryError::WriteFailed {
                 address,
                 reason: "WriteProcessMemory failed".to_string(),
@@ -339,14 +364,15 @@ impl MemoryScanner {
         for region in regions.iter().filter(|r| self.should_scan_region(r)) {
             if let Ok(data) = self.read_memory(region.base_address, region.size) {
                 let matches = self.pattern_scanner.scan_pattern(&pattern, &data);
-                
+
                 for pattern_match in matches {
                     results.push(ScanResult {
                         address: region.base_address + pattern_match.offset,
                         size: pattern_match.size,
                         region: region.clone(),
                         result_type: ScanResultType::Pattern,
-                        data: data[pattern_match.offset..pattern_match.offset + pattern_match.size].to_vec(),
+                        data: data[pattern_match.offset..pattern_match.offset + pattern_match.size]
+                            .to_vec(),
                     });
                 }
             }
@@ -378,7 +404,7 @@ impl MemoryScanner {
         for region in regions.iter().filter(|r| self.should_scan_region(r)) {
             if let Ok(data) = self.read_memory(region.base_address, region.size) {
                 let matches = self.find_byte_sequences(&data, bytes);
-                
+
                 for offset in matches {
                     results.push(ScanResult {
                         address: region.base_address + offset,
@@ -395,9 +421,12 @@ impl MemoryScanner {
     }
 
     /// Performs a comprehensive scan including patterns and VTables.
-    pub fn comprehensive_scan(&self, patterns: &[&str]) -> Result<ComprehensiveScanResult, MemoryError> {
+    pub fn comprehensive_scan(
+        &self,
+        patterns: &[&str],
+    ) -> Result<ComprehensiveScanResult, MemoryError> {
         let mut pattern_results = Vec::new();
-        
+
         for pattern_str in patterns {
             let matches = self.scan_pattern(pattern_str)?;
             pattern_results.extend(matches);
@@ -429,7 +458,7 @@ impl MemoryScanner {
     /// Finds byte sequences in data using naive search.
     fn find_byte_sequences(&self, data: &[u8], pattern: &[u8]) -> Vec<usize> {
         let mut matches = Vec::new();
-        
+
         if pattern.is_empty() || data.len() < pattern.len() {
             return matches;
         }
@@ -474,7 +503,13 @@ impl ScanResult {
                     .join(" ");
                 let ascii = chunk
                     .iter()
-                    .map(|b| if b.is_ascii_graphic() { *b as char } else { '.' })
+                    .map(|b| {
+                        if b.is_ascii_graphic() {
+                            *b as char
+                        } else {
+                            '.'
+                        }
+                    })
                     .collect::<String>();
                 format!("{:08X}  {:<47} |{}|", self.address + i * 16, hex, ascii)
             })
@@ -503,13 +538,19 @@ impl ComprehensiveScanResult {
     /// Returns statistics about the scan results.
     pub fn statistics(&self) -> ScanStatistics {
         let total_regions = self.memory_regions.len();
-        let executable_regions = self.memory_regions.iter()
+        let executable_regions = self
+            .memory_regions
+            .iter()
             .filter(|r| r.is_executable())
             .count();
-        let readable_regions = self.memory_regions.iter()
+        let readable_regions = self
+            .memory_regions
+            .iter()
             .filter(|r| r.is_readable())
             .count();
-        let writable_regions = self.memory_regions.iter()
+        let writable_regions = self
+            .memory_regions
+            .iter()
             .filter(|r| r.is_writable())
             .count();
 
@@ -520,9 +561,7 @@ impl ComprehensiveScanResult {
             writable_regions,
             pattern_matches: self.pattern_matches.len(),
             vtables_found: self.vtables.len(),
-            total_virtual_functions: self.vtables.iter()
-                .map(|v| v.function_count())
-                .sum(),
+            total_virtual_functions: self.vtables.iter().map(|v| v.function_count()).sum(),
         }
     }
 }
@@ -591,7 +630,9 @@ impl RegionFilter {
 
     /// Adds a filter for address range.
     pub fn address_range(mut self, start: usize, end: usize) -> Self {
-        self.criteria.push(Box::new(move |r| r.base_address >= start && r.end_address() <= end));
+        self.criteria.push(Box::new(move |r| {
+            r.base_address >= start && r.end_address() <= end
+        }));
         self
     }
 
@@ -651,15 +692,11 @@ mod tests {
             region_type: MemoryType::Private,
         };
 
-        let filter = RegionFilter::new()
-            .executable()
-            .readable()
-            .min_size(0x800);
+        let filter = RegionFilter::new().executable().readable().min_size(0x800);
 
         assert!(filter.matches(&region));
 
-        let filter2 = RegionFilter::new()
-            .writable();
+        let filter2 = RegionFilter::new().writable();
 
         assert!(!filter2.matches(&region));
     }
