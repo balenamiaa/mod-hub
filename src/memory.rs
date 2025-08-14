@@ -7,14 +7,14 @@
 use std::fmt;
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
-use windows_sys::Win32::System::Memory::{
+use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
+use windows::Win32::System::Memory::{
     VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_FREE, MEM_RESERVE,
     PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
     PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_ALL_ACCESS};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_ALL_ACCESS};
 
 use crate::pattern::{Pattern, PatternScanner, PatternError};
 use crate::vtable::{VTable, VTableScanner};
@@ -92,14 +92,14 @@ pub enum MemoryProtection {
 impl From<u32> for MemoryProtection {
     fn from(protection: u32) -> Self {
         match protection {
-            PAGE_NOACCESS => MemoryProtection::NoAccess,
-            PAGE_READONLY => MemoryProtection::ReadOnly,
-            PAGE_READWRITE => MemoryProtection::ReadWrite,
-            PAGE_WRITECOPY => MemoryProtection::WriteCopy,
-            PAGE_EXECUTE => MemoryProtection::Execute,
-            PAGE_EXECUTE_READ => MemoryProtection::ExecuteRead,
-            PAGE_EXECUTE_READWRITE => MemoryProtection::ExecuteReadWrite,
-            PAGE_EXECUTE_WRITECOPY => MemoryProtection::ExecuteWriteCopy,
+            x if x == PAGE_NOACCESS.0 as u32 => MemoryProtection::NoAccess,
+            x if x == PAGE_READONLY.0 as u32 => MemoryProtection::ReadOnly,
+            x if x == PAGE_READWRITE.0 as u32 => MemoryProtection::ReadWrite,
+            x if x == PAGE_WRITECOPY.0 as u32 => MemoryProtection::WriteCopy,
+            x if x == PAGE_EXECUTE.0 as u32 => MemoryProtection::Execute,
+            x if x == PAGE_EXECUTE_READ.0 as u32 => MemoryProtection::ExecuteRead,
+            x if x == PAGE_EXECUTE_READWRITE.0 as u32 => MemoryProtection::ExecuteReadWrite,
+            x if x == PAGE_EXECUTE_WRITECOPY.0 as u32 => MemoryProtection::ExecuteWriteCopy,
             _ => MemoryProtection::NoAccess,
         }
     }
@@ -132,9 +132,9 @@ pub enum MemoryState {
 impl From<u32> for MemoryState {
     fn from(state: u32) -> Self {
         match state {
-            MEM_COMMIT => MemoryState::Commit,
-            MEM_FREE => MemoryState::Free,
-            MEM_RESERVE => MemoryState::Reserve,
+            x if x == MEM_COMMIT.0 as u32 => MemoryState::Commit,
+            x if x == MEM_FREE.0 as u32 => MemoryState::Free,
+            x if x == MEM_RESERVE.0 as u32 => MemoryState::Reserve,
             _ => MemoryState::Free,
         }
     }

@@ -38,8 +38,8 @@ impl Default for Config {
             fullscreen: true,
             hide_from_alt_tab: true,
             show_indicator: true,
-            toggle_vk: windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_INSERT as i32,
-            exit_vk: windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_F10 as i32,
+            toggle_vk: windows::Win32::UI::Input::KeyboardAndMouse::VK_INSERT.0 as _,
+            exit_vk: windows::Win32::UI::Input::KeyboardAndMouse::VK_F10.0 as _,
         }
     }
 }
@@ -47,16 +47,13 @@ impl Default for Config {
 impl Config {
     pub fn overlay_builder(&self) -> OverlayBuilder {
         OverlayBuilder::new()
-            .title(if self.window_title.is_empty() { self.project_name.clone() } else { self.window_title.clone() })
-            .always_on_top(self.always_on_top)
-            .transparent(self.transparent)
-            .decorated(self.decorated)
-            .resizable(self.resizable)
-            .fullscreen(self.fullscreen)
+            .title(if self.window_title.is_empty() {
+                self.project_name.clone()
+            } else {
+                self.window_title.clone()
+            })
             .hide_from_alt_tab(self.hide_from_alt_tab)
-            .show_indicator(self.show_indicator)
+            .click_through(true)
             .toggle_key(self.toggle_vk)
     }
 }
-
-

@@ -2,8 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(cargo check:*)",
-      "Bash(cargo:*)"
+      "Bash(cargo:*)",
+      "Bash(timeout:*)",
+      "Bash(taskkill:*)",
+      "WebSearch",
+      "Bash(cmd /c:*)",
+      "Bash(rustc:*)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }

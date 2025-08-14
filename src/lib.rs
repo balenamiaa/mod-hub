@@ -32,7 +32,8 @@ pub mod vtable;
 pub mod winapi;
 
 pub use crate::errors::{Error, Result};
-pub use overlay::{AppUi, OverlayBuilder, egui, run_overlay};
+pub use egui;
+pub use crate::overlay::{AppUi, OverlayBuilder};
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
