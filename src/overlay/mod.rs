@@ -21,10 +21,19 @@ mod painter_d3d;
 mod util;
 mod win;
 
+/// Trait implemented by application logic that renders UI each frame.
+///
+/// The implementation is called once per frame with an `egui::Context` to
+/// build widgets and windows. The overlay handles rendering and presentation.
 pub trait AppUi: Send + 'static {
     fn ui(&mut self, ctx: &egui::Context);
 }
 
+/// Builder for creating and running a transparent, topmost Windows overlay.
+///
+/// The overlay is rendered using Direct3D 11 and composed with DWM via
+/// DirectComposition. It supports click‑through mode, Alt‑Tab/taskbar hiding,
+/// and integrates with egui for immediate‑mode UI.
 #[derive(Clone, Debug)]
 pub struct OverlayBuilder {
     pub title: String,
@@ -49,48 +58,47 @@ impl Default for OverlayBuilder {
 }
 
 impl OverlayBuilder {
+    /// Creates a builder with sensible defaults for a full‑screen overlay.
     pub fn new() -> Self {
         Self::default()
     }
+    /// Sets the window title.
     pub fn title(mut self, t: impl Into<String>) -> Self {
         self.title = t.into();
         self
     }
+    /// Sets the initial client size in physical pixels.
     pub fn size(mut self, w: i32, h: i32) -> Self {
         self.width = w;
         self.height = h;
         self
     }
+    /// Controls Alt‑Tab/taskbar visibility. When true, the overlay is hidden.
     pub fn hide_from_alt_tab(mut self, v: bool) -> Self {
         self.hide_from_alt_tab = v;
         self
     }
+    /// Controls whether the overlay starts in click‑through mode.
     pub fn click_through(mut self, v: bool) -> Self {
         self.click_through_on_start = v;
         self
     }
+    /// Sets the keyboard virtual key used to toggle click‑through.
     pub fn toggle_key(mut self, vk: i32) -> Self {
         self.toggle_vk = vk;
         self
     }
 
+    /// Creates the overlay window, runs the event loop, renders and presents frames until closed.
     pub fn run<T: AppUi>(self, mut app: T) -> Result<()> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED)
-                .ok()
-                .map_err(|e| Error::Run(format!("CoInitializeEx: {e}")))?;
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
         }
-        winapi::debug_log("overlay: COM initialized");
 
-        let class =
-            win::register_window_class("restident_overlay_wnd").map_err(|e| Error::Create(e))?;
-        let owner_class =
-            win::register_window_class("restident_overlay_owner").map_err(|e| Error::Create(e))?;
-        winapi::debug_log("overlay: window classes registered");
+        let class = win::register_window_class("restident_overlay_wnd")?;
+        let owner_class = win::register_window_class("restident_overlay_owner")?;
 
-        let owner =
-            win::create_owner_window(owner_class, &self.title).map_err(|e| Error::Create(e))?;
-        winapi::debug_log(&format!("overlay: owner hwnd=0x{:x}", owner.0 as usize));
+        let owner = win::create_owner_window(owner_class, &self.title)?;
 
         let hwnd = win::create_overlay_window(
             class,
@@ -99,20 +107,18 @@ impl OverlayBuilder {
             self.width,
             self.height,
             self.hide_from_alt_tab,
-        )
-        .map_err(|e| Error::Create(e))?;
-        winapi::debug_log(&format!("overlay: overlay hwnd=0x{:x}", hwnd.0 as usize));
+        )?;
 
         let mut rect = RECT::default();
-        unsafe { GetClientRect(hwnd, &mut rect) };
+        unsafe {
+            let _ = GetClientRect(hwnd, &mut rect);
+        };
         let width = (rect.right - rect.left).max(1) as u32;
         let height = (rect.bottom - rect.top).max(1) as u32;
 
-        let mut d3d = d3d::D3D::new(width, height).map_err(|e| Error::Create(e))?;
-        winapi::debug_log(&format!("overlay: d3d initialized {}x{}", width, height));
-        let mut comp = dcomp::Composition::new(hwnd, &d3d).map_err(|e| Error::Create(e))?;
-        comp.bind_swap_chain(&d3d).map_err(|e| Error::Create(e))?;
-        winapi::debug_log("overlay: composition bound to swapchain");
+        let mut d3d = d3d::D3D::new(width, height)?;
+        let mut comp = dcomp::Composition::new(hwnd, &d3d)?;
+        comp.bind_swap_chain(&d3d)?;
 
         win::apply_transparency(hwnd);
         win::set_topmost(hwnd);
@@ -122,11 +128,10 @@ impl OverlayBuilder {
             win::set_click_through(hwnd, false);
         }
         win::show_no_activate(hwnd);
-        winapi::debug_log("overlay: window shown (no activate, topmost)");
 
         let egui_ctx = egui::Context::default();
         let mut input = InputCollector::new(hwnd);
-        let mut painter = painter_d3d::PainterD3D::new(&d3d).map_err(|e| Error::Create(e))?;
+        let mut painter = painter_d3d::PainterD3D::new(&d3d)?;
 
         let mut click_through = self.click_through_on_start;
         let mut prev_toggle = false;
@@ -143,24 +148,12 @@ impl OverlayBuilder {
             app.ui(&egui_ctx);
             let out = egui_ctx.end_pass();
             let clipped = egui_ctx.tessellate(out.shapes.clone(), egui_ctx.pixels_per_point());
-            winapi::debug_log(&format!(
-                "overlay: shapes={} clipped={} tex_set={} tex_free={}",
-                out.shapes.len(),
-                clipped.len(),
-                out.textures_delta.set.len(),
-                out.textures_delta.free.len()
-            ));
 
-            painter
-                .update_textures(&out.textures_delta)
-                .map_err(|e| Error::Run(e))?;
+            painter.update_textures(&out.textures_delta)?;
             d3d.begin_frame();
-            painter
-                .paint(width, height, &clipped)
-                .map_err(|e| Error::Run(e))?;
+            painter.paint(width, height, &clipped)?;
             d3d.present();
             if last_log.elapsed().as_secs_f32() > 1.0 {
-                winapi::debug_log("overlay: frame");
                 last_log = std::time::Instant::now();
             }
 
@@ -171,14 +164,19 @@ impl OverlayBuilder {
             }
             prev_toggle = down;
 
-            if crate::SHUTDOWN.load(core::sync::atomic::Ordering::SeqCst) || winapi::is_f10_pressed() {
+            if crate::SHUTDOWN.load(core::sync::atomic::Ordering::SeqCst)
+                || winapi::is_f10_pressed()
+            {
+                crate::SHUTDOWN.store(true, core::sync::atomic::Ordering::SeqCst);
                 unsafe { PostQuitMessage(0) };
                 break;
             }
 
             if resize_if_needed(hwnd, &mut d3d, &mut painter) {
                 let mut r = RECT::default();
-                unsafe { GetClientRect(hwnd, &mut r) };
+                unsafe {
+                    let _ = GetClientRect(hwnd, &mut r);
+                };
                 let w = (r.right - r.left).max(1) as u32;
                 let h = (r.bottom - r.top).max(1) as u32;
                 input.set_screen(w as f32, h as f32);
@@ -188,14 +186,18 @@ impl OverlayBuilder {
             }
         }
 
-        unsafe { DestroyWindow(hwnd); }
-        unsafe { CoUninitialize(); }
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        unsafe {
+            CoUninitialize();
+        }
 
         Ok(())
     }
 }
 
-fn drain_messages(hwnd: HWND, input: &mut InputCollector) -> bool {
+fn drain_messages(_hwnd: HWND, input: &mut InputCollector) -> bool {
     unsafe {
         let mut msg = MaybeUninit::<MSG>::zeroed();
         while PeekMessageW(msg.as_mut_ptr(), Some(HWND(null_mut())), 0, 0, PM_REMOVE).as_bool() {
@@ -204,7 +206,7 @@ fn drain_messages(hwnd: HWND, input: &mut InputCollector) -> bool {
                 return false;
             }
             input.on_message(&m);
-            TranslateMessage(&m);
+            let _ = TranslateMessage(&m);
             DispatchMessageW(&m);
         }
     }
@@ -213,7 +215,9 @@ fn drain_messages(hwnd: HWND, input: &mut InputCollector) -> bool {
 
 fn resize_if_needed(hwnd: HWND, d3d: &mut d3d::D3D, painter: &mut painter_d3d::PainterD3D) -> bool {
     let mut rect = RECT::default();
-    unsafe { GetClientRect(hwnd, &mut rect) };
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut rect);
+    }
     let w = (rect.right - rect.left).max(1) as u32;
     let h = (rect.bottom - rect.top).max(1) as u32;
     if w != d3d.width || h != d3d.height {
@@ -224,8 +228,9 @@ fn resize_if_needed(hwnd: HWND, d3d: &mut d3d::D3D, painter: &mut painter_d3d::P
     false
 }
 
+/// Collects Win32 messages and produces egui input events.
 struct InputCollector {
-    hwnd: HWND,
+    _hwnd: HWND,
     screen_w: f32,
     screen_h: f32,
     events: Vec<egui::Event>,
@@ -235,7 +240,7 @@ struct InputCollector {
 impl InputCollector {
     fn new(hwnd: HWND) -> Self {
         Self {
-            hwnd,
+            _hwnd: hwnd,
             screen_w: 0.0,
             screen_h: 0.0,
             events: Vec::new(),
@@ -251,7 +256,13 @@ impl InputCollector {
         self.screen_h = h;
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::new(0.0, 0.0), egui::vec2(w, h));
         let events = std::mem::take(&mut self.events);
-        egui::RawInput { screen_rect: Some(screen_rect), time: Some(now.elapsed().as_secs_f64()), max_texture_side: Some(8192), events, ..Default::default() }
+        egui::RawInput {
+            screen_rect: Some(screen_rect),
+            time: Some(now.elapsed().as_secs_f64()),
+            max_texture_side: Some(8192),
+            events,
+            ..Default::default()
+        }
     }
     fn on_message(&mut self, msg: &MSG) {
         match msg.message {

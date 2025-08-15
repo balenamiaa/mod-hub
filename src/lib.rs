@@ -35,8 +35,8 @@ pub mod vtable;
 pub mod winapi;
 
 pub use crate::errors::{Error, Result};
-pub use egui;
 pub use crate::overlay::{AppUi, OverlayBuilder};
+pub use egui;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -44,6 +44,18 @@ use std::time::Duration;
 
 pub(crate) static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
+
+fn init_logging() {
+    use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
+    // simplelog 0.12 uses `set_time_offset_to_local()` (not `set_time_to_local`).
+    let cfg = ConfigBuilder::new()
+        .set_time_offset_to_local()
+        .expect("Failed to set time offset to local")
+        .build();
+    if let Ok(file) = std::fs::File::create("universe.log") {
+        let _ = WriteLogger::init(LevelFilter::Info, cfg, file);
+    }
+}
 
 fn start_hooks() {
     crate::hooks::init_global_manager::<crate::config::Config>(crate::config::Config::default());
@@ -104,6 +116,7 @@ fn try_start_system(hinst_dll: isize) -> bool {
     match RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) => {
             winapi::disable_thread_library_calls(hinst_dll.into_hinstance());
+            init_logging();
             start_hooks();
             start_runtime();
             true

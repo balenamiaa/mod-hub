@@ -1,3 +1,4 @@
+use crate::errors::{Error, Result};
 use crate::overlay::util::wide_null;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
@@ -7,7 +8,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
-pub fn register_window_class(name: &str) -> Result<PCWSTR, String> {
+/// Registers a minimal window class with a default window procedure.
+pub fn register_window_class(name: &str) -> Result<PCWSTR> {
     let wname = wide_null(name);
     let cls = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -19,12 +21,13 @@ pub fn register_window_class(name: &str) -> Result<PCWSTR, String> {
     };
     let atom = unsafe { RegisterClassExW(&cls) };
     if atom == 0 {
-        return Err("RegisterClassExW failed".into());
+        return Err(Error::RegisterClassFailed);
     }
     Ok(PCWSTR(wname.as_ptr()))
 }
 
-pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND, String> {
+/// Creates a hidden owner window used to hide the overlay from Alt‑Tab/taskbar.
+pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND> {
     let wtitle = wide_null(title);
     let hwnd = unsafe {
         CreateWindowExW(
@@ -44,10 +47,11 @@ pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND, String> {
             None,
         )
     }
-    .map_err(|e| format!("CreateWindowExW owner: {e}"))?;
+    .map_err(Error::CreateOwnerWindow)?;
     Ok(hwnd)
 }
 
+/// Creates the overlay popup window with layered transparency and topmost state.
 pub fn create_overlay_window(
     class: PCWSTR,
     owner: HWND,
@@ -55,7 +59,7 @@ pub fn create_overlay_window(
     width: i32,
     height: i32,
     hide_alt_tab: bool,
-) -> Result<HWND, String> {
+) -> Result<HWND> {
     let wtitle = wide_null(title);
     let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST;
     if !hide_alt_tab {
@@ -80,7 +84,7 @@ pub fn create_overlay_window(
             None,
         )
     }
-    .map_err(|e| format!("CreateWindowExW overlay: {e}"))?;
+    .map_err(Error::CreateOverlayWindow)?;
 
     unsafe {
         if hide_alt_tab {
@@ -92,7 +96,7 @@ pub fn create_overlay_window(
             exs |= WS_EX_APPWINDOW.0 as isize;
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exs);
         }
-        SetWindowPos(
+        let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
             0,
@@ -122,10 +126,11 @@ pub fn create_overlay_window(
     Ok(hwnd)
 }
 
+/// Shows the overlay without activating it and keeps it topmost.
 pub fn show_no_activate(hwnd: HWND) {
     unsafe {
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
             0,
@@ -137,9 +142,10 @@ pub fn show_no_activate(hwnd: HWND) {
     }
 }
 
+/// Ensures the overlay stays topmost.
 pub fn set_topmost(hwnd: HWND) {
     unsafe {
-        SetWindowPos(
+        let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
             0,
@@ -151,6 +157,7 @@ pub fn set_topmost(hwnd: HWND) {
     }
 }
 
+/// Toggles click‑through mode by setting/removing WS_EX_TRANSPARENT and activation.
 pub fn set_click_through(hwnd: HWND, enabled: bool) {
     unsafe {
         let mut ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -160,7 +167,7 @@ pub fn set_click_through(hwnd: HWND, enabled: bool) {
             ex &= !((WS_EX_TRANSPARENT | WS_EX_NOACTIVATE).0 as isize);
         }
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
-        SetWindowPos(
+        let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
             0,
@@ -170,13 +177,14 @@ pub fn set_click_through(hwnd: HWND, enabled: bool) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         );
         if !enabled {
-            SetForegroundWindow(hwnd);
-            SetActiveWindow(hwnd);
-            SetFocus(Some(hwnd));
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetActiveWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
         }
     }
 }
 
+/// Applies per‑pixel transparency and extends the DWM frame into the client area.
 pub fn apply_transparency(hwnd: HWND) {
     unsafe {
         let _ = SetLayeredWindowAttributes(

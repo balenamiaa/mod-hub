@@ -1,7 +1,9 @@
+use crate::errors::{Error, Result};
 use crate::overlay::d3d::D3D;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::DirectComposition::*;
 
+/// DirectComposition device and visual tree targeting the overlay window.
 pub struct Composition {
     device: IDCompositionDevice,
     target: IDCompositionTarget,
@@ -9,13 +11,15 @@ pub struct Composition {
 }
 
 impl Composition {
-    pub fn new(hwnd: HWND, d3d: &crate::overlay::d3d::D3D) -> Result<Self, String> {
+    /// Creates a DirectComposition device and a target bound to `hwnd`.
+    pub fn new(hwnd: HWND, d3d: &crate::overlay::d3d::D3D) -> Result<Self> {
         let dxgi_device = &d3d.dxgi_device;
-        let device: IDCompositionDevice = unsafe { DCompositionCreateDevice(Some(dxgi_device)) }
-            .map_err(|e| format!("DCompositionCreateDevice: {e}"))?;
+        let device: IDCompositionDevice =
+            unsafe { DCompositionCreateDevice(Some(dxgi_device)) }
+                .map_err(Error::DcompCreateDevice)?;
         let target = unsafe { device.CreateTargetForHwnd(hwnd, true) }
-            .map_err(|e| format!("CreateTargetForHwnd: {e}"))?;
-        let visual = unsafe { device.CreateVisual() }.map_err(|e| format!("CreateVisual: {e}"))?;
+            .map_err(Error::DcompCreateTarget)?;
+        let visual = unsafe { device.CreateVisual() }.map_err(Error::DcompCreateVisual)?;
         Ok(Self {
             device,
             target,
@@ -23,21 +27,20 @@ impl Composition {
         })
     }
 
-    pub fn bind_swap_chain(&mut self, d3d: &D3D) -> Result<(), String> {
+    /// Sets the swap chain as the root visual content and commits the scene.
+    pub fn bind_swap_chain(&mut self, d3d: &D3D) -> Result<()> {
         unsafe {
             self.visual
                 .SetContent(&d3d.swap_chain)
-                .map_err(|e| format!("Visual::SetContent: {e}"))?;
+                .map_err(Error::DcompSetContent)?;
         }
         unsafe {
             self.target
                 .SetRoot(&self.visual)
-                .map_err(|e| format!("Target::SetRoot: {e}"))?;
+                .map_err(Error::DcompSetRoot)?;
         }
         unsafe {
-            self.device
-                .Commit()
-                .map_err(|e| format!("DComp Commit: {e}"))?;
+            self.device.Commit().map_err(Error::DcompCommit)?;
         }
         Ok(())
     }

@@ -36,7 +36,7 @@ impl<C: Send + Sync + 'static> HookContext<C> {
             )
             .hook()
         }
-        .map_err(|e| Error::Run(e.to_string()))?;
+        .map_err(|e| Error::HookInstall(e))?;
         Ok(HookGuard::own(hook))
     }
 
@@ -56,7 +56,7 @@ impl<C: Send + Sync + 'static> HookContext<C> {
             )
             .hook()
         }
-        .map_err(|e| Error::Run(e.to_string()))?;
+        .map_err(|e| Error::HookInstall(e))?;
         Ok(HookGuard::own(hook))
     }
 }

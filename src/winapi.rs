@@ -65,7 +65,12 @@ pub fn debug_log(msg: &str) {
 
 #[cfg(target_os = "windows")]
 pub fn hwnd_exstyle_hex(hwnd: isize) -> String {
-    unsafe { format!("0x{:016x}", GetWindowLongPtrA(HWND(hwnd as *mut _), GWL_EXSTYLE)) }
+    unsafe {
+        format!(
+            "0x{:016x}",
+            GetWindowLongPtrA(HWND(hwnd as *mut _), GWL_EXSTYLE)
+        )
+    }
 }
 
 #[cfg(not(target_os = "windows"))]

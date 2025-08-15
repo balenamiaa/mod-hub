@@ -10,6 +10,8 @@ crate-type = ["cdylib", "rlib"]
 egui = "0.32.0"
 ilhook = "2.1.2"
 thiserror = "2.0.12"
+log = "0.4"
+simplelog = "0.12"
 windows = { version = "0.60.0", features = [
     "Win32_Foundation",
     "Win32_System_Com",

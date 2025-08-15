@@ -1,3 +1,4 @@
+use crate::errors::{Error, Result};
 use crate::overlay::d3d::D3D;
 use egui::ClippedPrimitive;
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::PCSTR;
 
+/// Egui mesh painter backed by Direct3D 11.
 pub struct PainterD3D {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -27,7 +29,7 @@ pub struct PainterD3D {
 
 struct Texture {
     srv: ID3D11ShaderResourceView,
-    size: [u32; 2],
+    _size: [u32; 2],
 }
 
 #[repr(C)]
@@ -45,7 +47,8 @@ struct Vertex {
 }
 
 impl PainterD3D {
-    pub fn new(d3d: &D3D) -> Result<Self, String> {
+    /// Creates shaders, pipeline state and persistent buffers for rendering.
+    pub fn new(d3d: &D3D) -> Result<Self> {
         let device = d3d.device.clone();
         let context = d3d.context.clone();
 
@@ -57,14 +60,14 @@ impl PainterD3D {
             let mut vs = None;
             device
                 .CreateVertexShader(vsb.as_slice(), None, Some(&mut vs))
-                .map_err(|e| format!("CreateVertexShader: {e}"))?;
+                .map_err(Error::CreateVertexShader)?;
             vs.unwrap()
         };
         let ps = unsafe {
             let mut ps = None;
             device
                 .CreatePixelShader(psb.as_slice(), None, Some(&mut ps))
-                .map_err(|e| format!("CreatePixelShader: {e}"))?;
+                .map_err(Error::CreatePixelShader)?;
             ps.unwrap()
         };
 
@@ -101,7 +104,7 @@ impl PainterD3D {
             let mut layout = None;
             device
                 .CreateInputLayout(&elems, vsb.as_slice(), Some(&mut layout))
-                .map_err(|e| format!("CreateInputLayout: {e}"))?;
+                .map_err(Error::CreateInputLayout)?;
             layout.unwrap()
         };
 
@@ -116,7 +119,7 @@ impl PainterD3D {
             let mut sampler = None;
             device
                 .CreateSamplerState(&sampler_desc, Some(&mut sampler))
-                .map_err(|e| format!("CreateSamplerState: {e}"))?;
+                .map_err(Error::CreateSampler)?;
             sampler.unwrap()
         };
 
@@ -146,7 +149,7 @@ impl PainterD3D {
             let mut blend = None;
             device
                 .CreateBlendState(&blend_desc, Some(&mut blend))
-                .map_err(|e| format!("CreateBlendState: {e}"))?;
+                .map_err(Error::CreateBlend)?;
             blend.unwrap()
         };
 
@@ -160,7 +163,7 @@ impl PainterD3D {
             let mut raster = None;
             device
                 .CreateRasterizerState(&rast_desc, Some(&mut raster))
-                .map_err(|e| format!("CreateRasterizerState: {e}"))?;
+                .map_err(Error::CreateRaster)?;
             raster.unwrap()
         };
 
@@ -175,7 +178,7 @@ impl PainterD3D {
             let mut cbuf = None;
             device
                 .CreateBuffer(&cbuf_desc, None, Some(&mut cbuf))
-                .map_err(|e| format!("CreateBuffer cbuf: {e}"))?;
+                .map_err(Error::CreateBuffer)?;
             cbuf.unwrap()
         };
 
@@ -190,7 +193,7 @@ impl PainterD3D {
             let mut vb = None;
             device
                 .CreateBuffer(&vb_desc, None, Some(&mut vb))
-                .map_err(|e| format!("CreateBuffer vb: {e}"))?;
+                .map_err(Error::CreateBuffer)?;
             vb.unwrap()
         };
         let ib_desc = D3D11_BUFFER_DESC {
@@ -204,7 +207,7 @@ impl PainterD3D {
             let mut ib = None;
             device
                 .CreateBuffer(&ib_desc, None, Some(&mut ib))
-                .map_err(|e| format!("CreateBuffer ib: {e}"))?;
+                .map_err(Error::CreateBuffer)?;
             ib.unwrap()
         };
 
@@ -226,11 +229,13 @@ impl PainterD3D {
         })
     }
 
-    pub fn on_resize(&mut self, _d3d: &D3D) -> Result<(), String> {
+    /// Notifies the painter that the backbuffer size changed.
+    pub fn on_resize(&mut self, _d3d: &D3D) -> Result<()> {
         Ok(())
     }
 
-    pub fn update_textures(&mut self, delta: &egui::TexturesDelta) -> Result<(), String> {
+    /// Applies texture uploads and frees according to egui's `TexturesDelta`.
+    pub fn update_textures(&mut self, delta: &egui::TexturesDelta) -> Result<()> {
         for (id, img_delta) in &delta.set {
             let mut full = None;
             match &img_delta.image {
@@ -253,7 +258,7 @@ impl PainterD3D {
                     }
                     full = Some((w, h, buf));
                 }
-                _ => {}
+                
             }
             if let Some((w, h, buf)) = full {
                 self.create_or_update_texture(*id, w, h, &buf)?;
@@ -271,7 +276,7 @@ impl PainterD3D {
         w: u32,
         h: u32,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let tex_desc = D3D11_TEXTURE2D_DESC {
             Width: w,
             Height: h,
@@ -295,7 +300,7 @@ impl PainterD3D {
             let mut tex = None;
             self.device
                 .CreateTexture2D(&tex_desc, Some(&init), Some(&mut tex))
-                .map_err(|e| format!("CreateTexture2D: {e}"))?;
+                .map_err(Error::CreateTexture)?;
             let tex = tex.unwrap();
             let srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
                 Format: tex_desc.Format,
@@ -310,19 +315,20 @@ impl PainterD3D {
             let mut srv = None;
             self.device
                 .CreateShaderResourceView(&tex, Some(&srv_desc), Some(&mut srv))
-                .map_err(|e| format!("CreateShaderResourceView: {e}"))?;
+                .map_err(Error::CreateSrv)?;
             let srv = srv.unwrap();
-            self.textures.insert(id, Texture { srv, size: [w, h] });
+            self.textures.insert(id, Texture { srv, _size: [w, h] });
         }
         Ok(())
     }
 
+    /// Renders a list of clipped egui primitives into the current backbuffer.
     pub fn paint(
         &mut self,
         width: u32,
         height: u32,
         clipped: &[ClippedPrimitive],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         unsafe {
             let ctx = &self.context;
 
@@ -344,8 +350,6 @@ impl PainterD3D {
             ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
             ctx.VSSetConstantBuffers(0, Some(&[Some(self.cbuf.clone())]));
 
-            let mut draw_calls = 0u32;
-            let mut total_indices = 0u32;
             for cp in clipped {
                 let sc = rect_to_scissor(&cp.clip_rect, width, height);
                 ctx.RSSetScissorRects(Some(&[sc]));
@@ -374,24 +378,21 @@ impl PainterD3D {
                         ctx.IASetIndexBuffer(&self.ib, DXGI_FORMAT_R32_UINT, 0);
                         ctx.PSSetShaderResources(0, Some(&[Some(srv)]));
                         ctx.DrawIndexed(mesh.indices.len() as u32, 0, 0);
-                        draw_calls += 1;
-                        total_indices += mesh.indices.len() as u32;
                     }
                     _ => {}
                 }
             }
-            crate::winapi::debug_log(&format!("overlay: draws={} indices={}", draw_calls, total_indices));
         }
         Ok(())
     }
 }
 
-fn compile_shader(src: &str, profile: &str, entry: &str) -> Result<Vec<u8>, String> {
+fn compile_shader(src: &str, profile: &str, entry: &str) -> Result<Vec<u8>> {
     use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
     let mut code = None;
     unsafe {
-        let entry_c = std::ffi::CString::new(entry).map_err(|e| format!("CString: {e}"))?;
-        let profile_c = std::ffi::CString::new(profile).map_err(|e| format!("CString: {e}"))?;
+        let entry_c = std::ffi::CString::new(entry)?;
+        let profile_c = std::ffi::CString::new(profile)?;
         D3DCompile(
             src.as_ptr() as *const _,
             src.len(),
@@ -405,7 +406,7 @@ fn compile_shader(src: &str, profile: &str, entry: &str) -> Result<Vec<u8>, Stri
             &mut code,
             Some(std::ptr::null_mut()),
         )
-        .map_err(|e| format!("D3DCompile: {e}"))?;
+        .map_err(Error::ShaderCompile)?;
     }
     let blob = code.unwrap();
     let mut v = Vec::new();
@@ -440,7 +441,7 @@ fn upload_mesh(
     vb: &ID3D11Buffer,
     ib: &ID3D11Buffer,
     mesh: &egui::epaint::Mesh,
-) -> Result<(), String> {
+) -> Result<()> {
     let mut vertices: Vec<Vertex> = Vec::with_capacity(mesh.vertices.len());
     for v in &mesh.vertices {
         let c = v.color.to_array();
@@ -461,7 +462,7 @@ fn upload_mesh(
     unsafe {
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
         ctx.Map(vb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut m))
-            .map_err(|e| format!("Map vb: {e}"))?;
+            .map_err(Error::MapBuffer)?;
         std::ptr::copy_nonoverlapping(
             vertices.as_ptr() as *const u8,
             m.pData as *mut u8,
@@ -470,7 +471,7 @@ fn upload_mesh(
         ctx.Unmap(vb, 0);
         let mut mi = D3D11_MAPPED_SUBRESOURCE::default();
         ctx.Map(ib, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mi))
-            .map_err(|e| format!("Map ib: {e}"))?;
+            .map_err(Error::MapBuffer)?;
         std::ptr::copy_nonoverlapping(
             indices.as_ptr() as *const u8,
             mi.pData as *mut u8,
@@ -491,7 +492,7 @@ fn srgb_to_linear(x: u8) -> f32 {
     }
 }
 
-fn create_fallback_white(device: &ID3D11Device) -> Result<ID3D11ShaderResourceView, String> {
+fn create_fallback_white(device: &ID3D11Device) -> Result<ID3D11ShaderResourceView> {
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: 1,
         Height: 1,
@@ -516,7 +517,7 @@ fn create_fallback_white(device: &ID3D11Device) -> Result<ID3D11ShaderResourceVi
         let mut tex = None;
         device
             .CreateTexture2D(&tex_desc, Some(&init), Some(&mut tex))
-            .map_err(|e| format!("CreateTexture2D fallback: {e}"))?;
+            .map_err(Error::CreateTexture)?;
         let tex = tex.unwrap();
         let srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
             Format: tex_desc.Format,
@@ -531,7 +532,7 @@ fn create_fallback_white(device: &ID3D11Device) -> Result<ID3D11ShaderResourceVi
         let mut srv = None;
         device
             .CreateShaderResourceView(&tex, Some(&srv_desc), Some(&mut srv))
-            .map_err(|e| format!("CreateShaderResourceView fallback: {e}"))?;
+            .map_err(Error::CreateSrv)?;
         Ok(srv.unwrap())
     }
 }

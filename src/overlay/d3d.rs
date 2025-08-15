@@ -1,3 +1,4 @@
+use crate::errors::{Error, Result};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -5,6 +6,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
 
+/// Direct3D 11 device, context and DXGI swap chain configured for composition.
 pub struct D3D {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
@@ -16,7 +18,8 @@ pub struct D3D {
 }
 
 impl D3D {
-    pub fn new(width: u32, height: u32) -> Result<Self, String> {
+    /// Creates a BGRA‑capable device and a premultiplied swap chain sized to the given dimensions.
+    pub fn new(width: u32, height: u32) -> Result<Self> {
         let mut device = None;
         let mut context = None;
         let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
@@ -32,15 +35,16 @@ impl D3D {
                 None,
                 Some(&mut context),
             )
-            .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
+            .map_err(Error::D3dCreateDevice)?;
         }
         let device = device.unwrap();
         let context = context.unwrap();
-        let dxgi_device: IDXGIDevice = device.cast().map_err(|e| format!("IDXGIDevice: {e}"))?;
+        let dxgi_device: IDXGIDevice = device
+            .cast()
+            .map_err(Error::Windows)?;
 
         let factory: IDXGIFactory2 = unsafe {
-            CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))
-                .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
+            CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).map_err(Error::DxgiCreateFactory)?
         };
 
         let desc = DXGI_SWAP_CHAIN_DESC1 {
@@ -61,7 +65,7 @@ impl D3D {
         let swap_chain = unsafe {
             factory
                 .CreateSwapChainForComposition(&dxgi_device, &desc, None)
-                .map_err(|e| format!("CreateSwapChainForComposition: {e}"))?
+                .map_err(Error::DxgiCreateSwapChain)?
         };
 
         Ok(Self {
@@ -75,14 +79,15 @@ impl D3D {
         })
     }
 
-    pub fn resize(&mut self, w: u32, h: u32) -> Result<(), String> {
+    /// Resizes the swap chain and invalidates any cached render targets.
+    pub fn resize(&mut self, w: u32, h: u32) -> Result<()> {
         if w == 0 || h == 0 {
             return Ok(());
         }
         unsafe {
             self.swap_chain
                 .ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))
-                .map_err(|e| format!("ResizeBuffers: {e}"))?;
+                .map_err(Error::DxgiResizeBuffers)?;
         }
         self.width = w;
         self.height = h;
@@ -90,6 +95,7 @@ impl D3D {
         Ok(())
     }
 
+    /// Binds the backbuffer to the pipeline and clears it to transparent.
     pub fn begin_frame(&self) {
         unsafe {
             if let Ok(tex) = self.swap_chain.GetBuffer::<ID3D11Texture2D>(0) {
@@ -119,6 +125,7 @@ impl D3D {
         }
     }
 
+    /// Presents the current backbuffer.
     pub fn present(&self) {
         unsafe {
             let _ = self.swap_chain.Present(0, DXGI_PRESENT(0));
