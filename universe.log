@@ -1,25 +1,28 @@
-2025-08-15T17:04:47.6908228+03:00 [INFO] logger initialized at level: Debug
-2025-08-15T17:04:47.691138+03:00 [INFO] starting hooks manager
-2025-08-15T17:04:47.691313+03:00 [INFO] HookManager created
-2025-08-15T17:04:47.6914821+03:00 [DEBUG] (1) mod_template::hooks: global hook manager initialized
-2025-08-15T17:04:47.6917049+03:00 [INFO] HookManager started: 0 modules, 0 hooks
-2025-08-15T17:04:47.6918837+03:00 [INFO] hooks started
-2025-08-15T17:04:47.6920984+03:00 [INFO] installing hooks
-2025-08-15T17:04:47.6922652+03:00 [DEBUG] (1) mod_template::hooks: registering hook module: ExampleModule
-2025-08-15T17:04:47.6924629+03:00 [DEBUG] (2) mod_template: runtime watcher thread started
-2025-08-15T17:04:47.6926825+03:00 [DEBUG] (3) mod_template: overlay thread starting
-2025-08-15T17:04:47.6947893+03:00 [INFO] overlay starting: Overlay Title (3440x1440), hide_alt_tab=true, click_through=true
-2025-08-15T17:04:47.6949085+03:00 [DEBUG] (3) mod_template::overlay::win: window class registered: overlay_wnd
-2025-08-15T17:04:47.694988+03:00 [DEBUG] (3) mod_template::overlay::win: window class registered: overlay_owner
-2025-08-15T17:04:47.697309+03:00 [DEBUG] (3) mod_template::overlay::win: owner window created: HWND(0xc09a8)
-2025-08-15T17:04:47.7142514+03:00 [DEBUG] (3) mod_template::overlay::win: overlay window created: HWND(0xe098a)
-2025-08-15T17:04:47.7143564+03:00 [INFO] overlay window created: HWND(0xe098a)
-2025-08-15T17:04:47.8544585+03:00 [DEBUG] (3) mod_template::overlay::d3d: D3D11 device + swapchain created: 3440x1440
-2025-08-15T17:04:47.8545519+03:00 [INFO] d3d initialized: 3440x1440
-2025-08-15T17:04:47.8552198+03:00 [DEBUG] (3) mod_template::overlay::dcomp: dcomp device/target/visual created
-2025-08-15T17:04:47.8553195+03:00 [DEBUG] (3) mod_template::overlay::dcomp: dcomp bound swapchain and committed
-2025-08-15T17:04:47.8571428+03:00 [INFO] overlay shown (no activate), click_through=true
-2025-08-15T17:41:01.8070325+03:00 [INFO] click-through toggled -> false
-2025-08-15T17:41:07.8120252+03:00 [INFO] click-through toggled -> true
-2025-08-15T17:41:10.544024+03:00 [INFO] overlay shutdown complete
-2025-08-15T17:41:10.5514605+03:00 [DEBUG] (2) mod_template: runtime watcher exiting due to shutdown flag
+2025-08-15T18:05:01.2179064+03:00 [INFO] logger initialized at level: Debug
+2025-08-15T18:05:01.2181846+03:00 [INFO] starting hooks manager
+2025-08-15T18:05:01.2182634+03:00 [INFO] HookManager created
+2025-08-15T18:05:01.2183506+03:00 [DEBUG] (2) mod_template: runtime watcher thread started
+2025-08-15T18:05:01.2184839+03:00 [DEBUG] (1) mod_template::hooks: global hook manager initialized
+2025-08-15T18:05:01.2185544+03:00 [INFO] installing hooks
+2025-08-15T18:05:01.2186315+03:00 [DEBUG] (1) mod_template::hooks: registering hook module: ExampleModule
+2025-08-15T18:05:01.2187685+03:00 [INFO] starting module: ExampleModule
+2025-08-15T18:05:01.218859+03:00 [DEBUG] (1) mod_template::hooks: install_retn: target=0x7ff6826b2390 user_data=0x0
+2025-08-15T18:05:01.2221453+03:00 [INFO] retn hook installed at 0x7ff6826b2390
+2025-08-15T18:05:01.2222299+03:00 [INFO] HookManager started: 1 modules, 1 hooks
+2025-08-15T18:05:01.2222864+03:00 [INFO] hooks started
+2025-08-15T18:05:01.2224491+03:00 [DEBUG] (4) mod_template: overlay thread starting
+2025-08-15T18:05:01.2235288+03:00 [INFO] overlay starting: Overlay Title (3440x1440), hide_alt_tab=true, click_through=true
+2025-08-15T18:05:01.2236444+03:00 [DEBUG] (4) mod_template::overlay::win: window class registered: overlay_wnd
+2025-08-15T18:05:01.2237207+03:00 [DEBUG] (4) mod_template::overlay::win: window class registered: overlay_owner
+2025-08-15T18:05:01.2261963+03:00 [DEBUG] (4) mod_template::overlay::win: owner window created: HWND(0x2d40298)
+2025-08-15T18:05:01.2433158+03:00 [DEBUG] (4) mod_template::overlay::win: overlay window created: HWND(0xd0d1e)
+2025-08-15T18:05:01.2434136+03:00 [INFO] overlay window created: HWND(0xd0d1e)
+2025-08-15T18:05:01.3857917+03:00 [DEBUG] (4) mod_template::overlay::d3d: D3D11 device + swapchain created: 3440x1440
+2025-08-15T18:05:01.3858836+03:00 [INFO] d3d initialized: 3440x1440
+2025-08-15T18:05:01.3867637+03:00 [DEBUG] (4) mod_template::overlay::dcomp: dcomp device/target/visual created
+2025-08-15T18:05:01.3868726+03:00 [DEBUG] (4) mod_template::overlay::dcomp: dcomp bound swapchain and committed
+2025-08-15T18:05:01.3886648+03:00 [INFO] overlay shown (no activate), click_through=true
+2025-08-15T18:05:06.2188996+03:00 [INFO] example_callback called
+2025-08-15T18:05:06.2189767+03:00 [INFO] ori parameters: 0xa, 0x14
+2025-08-15T18:05:06.2190319+03:00 [INFO] ori result: 0x3
+2025-08-15T18:05:06.219082+03:00 [INFO] test call result: 3

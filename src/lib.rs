@@ -73,22 +73,12 @@ fn init_logging() {
     }
 }
 
-fn start_hooks() {
-    log::info!("starting hooks manager");
-    crate::hooks::init_global_manager::<crate::config::Config>(crate::config::Config::default());
-    if let Err(e) = crate::hooks::start::<crate::config::Config>() {
-        log::error!("failed to start hooks: {e}");
-    } else {
-        log::info!("hooks started");
-    }
-}
-
 fn stop_hooks() {
     log::info!("stopping hooks");
     crate::hooks::stop::<crate::config::Config>();
 }
 
-fn start_runtime() {
+fn start_runtime_watcher() {
     if SHUTDOWN.load(Ordering::SeqCst) {
         SHUTDOWN.store(false, Ordering::SeqCst);
     }
@@ -109,7 +99,9 @@ fn start_runtime() {
             thread::sleep(Duration::from_millis(50));
         }
     });
+}
 
+fn start_overlay() {
     thread::spawn(|| {
         let cfg = crate::config::Config::default();
         log::debug!("overlay thread starting");
@@ -189,11 +181,16 @@ fn install_hooks() {
                 Ok(vec![example_hook_0])
             }
         }
+
         register::<crate::config::Config, ExampleModule>(ExampleModule);
 
-        unsafe {
-            let _ = example_original_function(1, 2);
-        }
+        thread::spawn(|| {
+            thread::sleep(Duration::from_secs(5));
+            unsafe {
+                let result = example_original_function(10, 20);
+                log::info!("test call result: {}", result);
+            }
+        });
     }
 }
 
@@ -202,10 +199,23 @@ fn try_start_system(hinst_dll: isize) -> bool {
         Ok(_) => {
             winapi::disable_thread_library_calls(hinst_dll.into_hinstance());
             init_logging();
-            start_hooks();
-            start_runtime();
+
+            start_runtime_watcher();
+
+            log::info!("starting hooks manager");
+            crate::hooks::init_global_manager::<crate::config::Config>(
+                crate::config::Config::default(),
+            );
 
             install_hooks();
+
+            if let Err(e) = crate::hooks::start::<crate::config::Config>() {
+                log::error!("failed to start hooks: {e}");
+            } else {
+                log::info!("hooks started");
+            }
+
+            start_overlay();
 
             true
         }
