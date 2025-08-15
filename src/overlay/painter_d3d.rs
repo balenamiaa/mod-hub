@@ -56,6 +56,7 @@ impl PainterD3D {
         let ps_src = include_str!("shaders/egui_ps.hlsl");
         let vsb = compile_shader(vs_src, "vs_5_0", "main")?;
         let psb = compile_shader(ps_src, "ps_5_0", "main")?;
+        log::trace!("shaders compiled");
         let vs = unsafe {
             let mut vs = None;
             device
@@ -236,9 +237,15 @@ impl PainterD3D {
 
     /// Applies texture uploads and frees according to egui's `TexturesDelta`.
     pub fn update_textures(&mut self, delta: &egui::TexturesDelta) -> Result<()> {
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!(
+                "textures: set={}, free={}",
+                delta.set.len(),
+                delta.free.len()
+            );
+        }
         for (id, img_delta) in &delta.set {
-            let mut full = None;
-            match &img_delta.image {
+            let full = match &img_delta.image {
                 egui::ImageData::Color(color) => {
                     let (w, h) = (color.size[0] as u32, color.size[1] as u32);
                     let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -256,10 +263,9 @@ impl PainterD3D {
                             buf[i + 3] = (a * 255.0) as u8;
                         }
                     }
-                    full = Some((w, h, buf));
+                    Some((w, h, buf))
                 }
-                
-            }
+            };
             if let Some((w, h, buf)) = full {
                 self.create_or_update_texture(*id, w, h, &buf)?;
             }
@@ -323,12 +329,10 @@ impl PainterD3D {
     }
 
     /// Renders a list of clipped egui primitives into the current backbuffer.
-    pub fn paint(
-        &mut self,
-        width: u32,
-        height: u32,
-        clipped: &[ClippedPrimitive],
-    ) -> Result<()> {
+    pub fn paint(&mut self, width: u32, height: u32, clipped: &[ClippedPrimitive]) -> Result<()> {
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("painting {} clipped primitives", clipped.len());
+        }
         unsafe {
             let ctx = &self.context;
 

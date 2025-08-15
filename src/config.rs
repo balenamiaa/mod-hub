@@ -10,6 +10,8 @@ pub struct Config {
 
     // Overlay window
     pub window_title: String,
+    pub window_class: String,
+    pub owner_class: String,
     pub always_on_top: bool,
     pub transparent: bool,
     pub decorated: bool,
@@ -30,7 +32,9 @@ impl Default for Config {
             game_name: "Your Game".to_string(),
             author: "Your Name".to_string(),
             version: "0.1.0".to_string(),
-            window_title: "Overlay".to_string(),
+            window_title: "Overlay Title".to_string(),
+            window_class: "overlay_wnd".to_string(),
+            owner_class: "overlay_owner".to_string(),
             always_on_top: true,
             transparent: true,
             decorated: false,
@@ -52,6 +56,8 @@ impl Config {
             } else {
                 self.window_title.clone()
             })
+            .window_class(self.window_class.clone())
+            .owner_class(self.owner_class.clone())
             .hide_from_alt_tab(self.hide_from_alt_tab)
             .click_through(true)
             .toggle_key(self.toggle_vk)

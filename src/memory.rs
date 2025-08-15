@@ -17,7 +17,8 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_ALL_ACCESS};
 
-use crate::pattern::{Pattern, PatternError, PatternScanner};
+use crate::errors::Error;
+use crate::pattern::{Pattern, PatternScanner};
 use crate::vtable::{VTable, VTableScanner};
 
 /// Memory region information.
@@ -165,30 +166,6 @@ pub enum MemoryType {
     Private,
 }
 
-/// Errors that can occur during memory operations.
-#[derive(Debug, thiserror::Error)]
-pub enum MemoryError {
-    #[error("Failed to open process")]
-    ProcessAccessFailed,
-    #[error("Failed to read memory at 0x{address:X}: {reason}")]
-    ReadFailed { address: usize, reason: String },
-    #[error("Failed to write memory at 0x{address:X}: {reason}")]
-    WriteFailed { address: usize, reason: String },
-    #[error("Failed to query memory information: {reason}")]
-    QueryFailed { reason: String },
-    #[error("Invalid address: 0x{address:X}")]
-    InvalidAddress { address: usize },
-    #[error("Pattern error: {0}")]
-    PatternError(#[from] PatternError),
-}
-
-impl From<windows::core::Error> for MemoryError {
-    fn from(err: windows::core::Error) -> Self {
-        MemoryError::QueryFailed {
-            reason: err.to_string(),
-        }
-    }
-}
 
 /// Configuration for memory scanning operations.
 #[derive(Debug, Clone)]
@@ -230,14 +207,14 @@ pub struct MemoryScanner {
 
 impl MemoryScanner {
     /// Creates a new scanner for the current process.
-    pub fn new() -> Result<Self, MemoryError> {
+    pub fn new() -> Result<Self, Error> {
         Self::for_process(unsafe { GetCurrentProcess() })
     }
 
     /// Creates a new scanner for a specific process.
-    pub fn for_process(process_handle: HANDLE) -> Result<Self, MemoryError> {
+    pub fn for_process(process_handle: HANDLE) -> Result<Self, Error> {
         if process_handle == INVALID_HANDLE_VALUE || process_handle.0.is_null() {
-            return Err(MemoryError::ProcessAccessFailed);
+            return Err(Error::ProcessAccessFailed);
         }
 
         Ok(Self {
@@ -249,7 +226,7 @@ impl MemoryScanner {
     }
 
     /// Creates a scanner for a process ID.
-    pub fn for_process_id(process_id: u32) -> Result<Self, MemoryError> {
+    pub fn for_process_id(process_id: u32) -> Result<Self, Error> {
         let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process_id) }?;
         Self::for_process(handle)
     }
@@ -261,7 +238,7 @@ impl MemoryScanner {
     }
 
     /// Enumerates all memory regions in the process.
-    pub fn enumerate_regions(&self) -> Result<Vec<MemoryRegion>, MemoryError> {
+    pub fn enumerate_regions(&self) -> Result<Vec<MemoryRegion>, Error> {
         let mut regions = Vec::new();
         let mut address = 0;
 
@@ -307,7 +284,7 @@ impl MemoryScanner {
     }
 
     /// Reads memory from the target process.
-    pub fn read_memory(&self, address: usize, size: usize) -> Result<Vec<u8>, MemoryError> {
+    pub fn read_memory(&self, address: usize, size: usize) -> Result<Vec<u8>, Error> {
         let mut buffer = vec![0u8; size];
         let mut bytes_read = 0;
 
@@ -322,7 +299,7 @@ impl MemoryScanner {
         };
 
         if success.is_err() || bytes_read != size {
-            return Err(MemoryError::ReadFailed {
+            return Err(Error::ReadFailed {
                 address,
                 reason: "ReadProcessMemory failed".to_string(),
             });
@@ -332,7 +309,7 @@ impl MemoryScanner {
     }
 
     /// Writes memory to the target process.
-    pub fn write_memory(&self, address: usize, data: &[u8]) -> Result<(), MemoryError> {
+    pub fn write_memory(&self, address: usize, data: &[u8]) -> Result<(), Error> {
         let mut bytes_written = 0;
 
         let success = unsafe {
@@ -346,7 +323,7 @@ impl MemoryScanner {
         };
 
         if success.is_err() || bytes_written != data.len() {
-            return Err(MemoryError::WriteFailed {
+            return Err(Error::WriteFailed {
                 address,
                 reason: "WriteProcessMemory failed".to_string(),
             });
@@ -356,7 +333,7 @@ impl MemoryScanner {
     }
 
     /// Scans all suitable memory regions for a pattern.
-    pub fn scan_pattern(&self, pattern_str: &str) -> Result<Vec<ScanResult>, MemoryError> {
+    pub fn scan_pattern(&self, pattern_str: &str) -> Result<Vec<ScanResult>, Error> {
         let regions = self.enumerate_regions()?;
         let pattern = Pattern::new(pattern_str)?;
         let mut results = Vec::new();
@@ -382,7 +359,7 @@ impl MemoryScanner {
     }
 
     /// Scans for VTables in memory.
-    pub fn scan_vtables(&self) -> Result<Vec<VTable>, MemoryError> {
+    pub fn scan_vtables(&self) -> Result<Vec<VTable>, Error> {
         let regions = self.enumerate_regions()?;
         let mut vtables = Vec::new();
 
@@ -397,7 +374,7 @@ impl MemoryScanner {
     }
 
     /// Scans for specific byte sequences.
-    pub fn scan_bytes(&self, bytes: &[u8]) -> Result<Vec<ScanResult>, MemoryError> {
+    pub fn scan_bytes(&self, bytes: &[u8]) -> Result<Vec<ScanResult>, Error> {
         let regions = self.enumerate_regions()?;
         let mut results = Vec::new();
 
@@ -424,7 +401,7 @@ impl MemoryScanner {
     pub fn comprehensive_scan(
         &self,
         patterns: &[&str],
-    ) -> Result<ComprehensiveScanResult, MemoryError> {
+    ) -> Result<ComprehensiveScanResult, Error> {
         let mut pattern_results = Vec::new();
 
         for pattern_str in patterns {

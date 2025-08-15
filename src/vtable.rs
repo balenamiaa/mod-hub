@@ -4,9 +4,10 @@
 //! C++ virtual function tables in memory. It includes heuristics for detecting VTables,
 //! analyzing virtual function layouts, and extracting class hierarchies.
 
+use crate::errors::Result;
+use crate::pattern::{PatternMatch, PatternScanner};
 use std::collections::HashMap;
 use std::fmt;
-use crate::pattern::{PatternScanner, PatternMatch};
 
 /// Represents a virtual function table entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,8 +39,8 @@ impl VTable {
     /// Adds a virtual function to the table.
     pub fn add_function(&mut self, address: usize, index: usize) {
         self.functions.push(VirtualFunction { address, index });
-        self.size = (self.functions.len() * std::mem::size_of::<usize>()) + 
-                   std::mem::size_of::<usize>(); // +1 for RTTI pointer
+        self.size =
+            (self.functions.len() * std::mem::size_of::<usize>()) + std::mem::size_of::<usize>(); // +1 for RTTI pointer
     }
 
     /// Returns the number of virtual functions.
@@ -138,9 +139,10 @@ impl CodeHeuristics {
         }
 
         let bytes = &data[offset..offset + 4];
-        
+
         // Common x64 prologues:
-        matches!(bytes,
+        matches!(
+            bytes,
             // push rbp; mov rbp, rsp
             [0x55, 0x48, 0x89, 0xE5] |
             // push rbp; mov rbp, rsp (alternative)
@@ -172,12 +174,10 @@ impl CodeHeuristics {
         // RTTI typically has specific patterns
         // This is a simplified check - real RTTI analysis is more complex
         let bytes = &data[offset..offset + 8];
-        
+
         // Check for non-zero values that could be vtable pointers or name pointers
-        let ptr_val = usize::from_le_bytes(
-            bytes.try_into().unwrap_or([0; 8])
-        );
-        
+        let ptr_val = usize::from_le_bytes(bytes.try_into().unwrap_or([0; 8]));
+
         ptr_val != 0 && ptr_val >= base_addr && ptr_val <= base_addr + data.len()
     }
 }
@@ -237,7 +237,12 @@ impl VTableScanner {
     }
 
     /// Analyzes a potential VTable location.
-    fn analyze_potential_vtable(&self, data: &[u8], base_addr: usize, offset: usize) -> Option<VTable> {
+    fn analyze_potential_vtable(
+        &self,
+        data: &[u8],
+        base_addr: usize,
+        offset: usize,
+    ) -> Option<VTable> {
         let mut vtable = VTable::new(base_addr + offset);
         let ptr_size = std::mem::size_of::<usize>();
         let mut current_offset = offset;
@@ -255,11 +260,10 @@ impl VTableScanner {
 
         // Scan for virtual functions
         let mut function_index = 0;
-        while function_index < self.config.max_functions && 
-              current_offset + ptr_size <= data.len() {
-            
+        while function_index < self.config.max_functions && current_offset + ptr_size <= data.len()
+        {
             let func_ptr = self.read_pointer(data, current_offset);
-            
+
             if !CodeHeuristics::is_valid_function_ptr(func_ptr, data, base_addr) {
                 break;
             }
@@ -293,13 +297,14 @@ impl VTableScanner {
 
     /// Checks if an address is in an excluded range.
     fn is_address_excluded(&self, address: usize) -> bool {
-        self.config.excluded_ranges.iter().any(|(start, end)| {
-            address >= *start && address <= *end
-        })
+        self.config
+            .excluded_ranges
+            .iter()
+            .any(|(start, end)| address >= *start && address <= *end)
     }
 
     /// Finds VTables by scanning for common VTable patterns.
-    pub fn find_vtables_by_patterns(&self, data: &[u8]) -> Result<Vec<PatternMatch>, crate::pattern::PatternError> {
+    pub fn find_vtables_by_patterns(&self, data: &[u8]) -> Result<Vec<PatternMatch>> {
         // Common VTable patterns (this is highly specific to compiler and architecture)
         let patterns = vec![
             // Pattern for typical VTable with RTTI
@@ -321,26 +326,26 @@ impl VTableScanner {
     /// Analyzes inheritance relationships between VTables.
     pub fn analyze_inheritance(&self, vtables: &[VTable]) -> HashMap<usize, Vec<usize>> {
         let mut inheritance_map = HashMap::new();
-        
+
         for base_vtable in vtables {
             let mut derived_vtables = Vec::new();
-            
+
             for derived_vtable in vtables {
                 if base_vtable.base_address == derived_vtable.base_address {
                     continue;
                 }
-                
+
                 // Check if derived_vtable extends base_vtable
                 if self.is_derived_vtable(base_vtable, derived_vtable) {
                     derived_vtables.push(derived_vtable.base_address);
                 }
             }
-            
+
             if !derived_vtables.is_empty() {
                 inheritance_map.insert(base_vtable.base_address, derived_vtables);
             }
         }
-        
+
         inheritance_map
     }
 
@@ -353,8 +358,9 @@ impl VTableScanner {
         // Check if the first N functions match (where N = base function count)
         let base_functions = base.functions.len();
         for i in 0..base_functions {
-            if let (Some(base_func), Some(derived_func)) = 
-                (base.get_function(i), derived.get_function(i)) {
+            if let (Some(base_func), Some(derived_func)) =
+                (base.get_function(i), derived.get_function(i))
+            {
                 if base_func.address != derived_func.address {
                     return false;
                 }
@@ -373,32 +379,33 @@ impl VTableAnalyzer {
     pub fn reconstruct_hierarchy(vtables: &[VTable]) -> ClassHierarchy {
         let scanner = VTableScanner::new();
         let inheritance_map = scanner.analyze_inheritance(vtables);
-        
+
         let mut hierarchy = ClassHierarchy::new();
-        
+
         for vtable in vtables {
             let class_info = ClassInfo {
                 vtable_address: vtable.base_address,
-                name: vtable.estimated_class_name().unwrap_or_else(|| {
-                    format!("UnknownClass_{:X}", vtable.base_address)
-                }),
+                name: vtable
+                    .estimated_class_name()
+                    .unwrap_or_else(|| format!("UnknownClass_{:X}", vtable.base_address)),
                 functions: vtable.functions.clone(),
                 base_classes: Vec::new(),
-                derived_classes: inheritance_map.get(&vtable.base_address)
+                derived_classes: inheritance_map
+                    .get(&vtable.base_address)
                     .cloned()
                     .unwrap_or_default(),
             };
-            
+
             hierarchy.add_class(class_info);
         }
-        
+
         hierarchy
     }
 
     /// Finds function duplicates across VTables.
     pub fn find_shared_functions(vtables: &[VTable]) -> HashMap<usize, Vec<usize>> {
         let mut function_to_vtables = HashMap::new();
-        
+
         for vtable in vtables {
             for function in &vtable.functions {
                 function_to_vtables
@@ -407,16 +414,18 @@ impl VTableAnalyzer {
                     .push(vtable.base_address);
             }
         }
-        
+
         // Filter to only functions shared between multiple VTables
-        function_to_vtables.into_iter()
+        function_to_vtables
+            .into_iter()
             .filter(|(_, vtables)| vtables.len() > 1)
             .collect()
     }
 
     /// Estimates the size of objects based on VTable analysis.
     pub fn estimate_object_sizes(vtables: &[VTable]) -> HashMap<usize, usize> {
-        vtables.iter()
+        vtables
+            .iter()
             .map(|vtable| {
                 // Basic estimation based on function count and known patterns
                 let base_size = std::mem::size_of::<usize>(); // vtable pointer
@@ -463,13 +472,15 @@ impl ClassHierarchy {
     }
 
     pub fn find_root_classes(&self) -> Vec<&ClassInfo> {
-        self.classes.values()
+        self.classes
+            .values()
             .filter(|class| class.base_classes.is_empty())
             .collect()
     }
 
     pub fn find_leaf_classes(&self) -> Vec<&ClassInfo> {
-        self.classes.values()
+        self.classes
+            .values()
             .filter(|class| class.derived_classes.is_empty())
             .collect()
     }
@@ -478,26 +489,31 @@ impl ClassHierarchy {
 impl fmt::Display for ClassHierarchy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Class Hierarchy:")?;
-        
+
         for root_class in self.find_root_classes() {
             self.print_class_tree(f, root_class, 0)?;
         }
-        
+
         Ok(())
     }
 }
 
 impl ClassHierarchy {
-    fn print_class_tree(&self, f: &mut fmt::Formatter<'_>, class: &ClassInfo, depth: usize) -> fmt::Result {
+    fn print_class_tree(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        class: &ClassInfo,
+        depth: usize,
+    ) -> fmt::Result {
         let indent = "  ".repeat(depth);
         writeln!(f, "{}{} (0x{:X})", indent, class.name, class.vtable_address)?;
-        
+
         for &derived_addr in &class.derived_classes {
             if let Some(derived_class) = self.get_class(derived_addr) {
                 self.print_class_tree(f, derived_class, depth + 1)?;
             }
         }
-        
+
         Ok(())
     }
 }
@@ -511,7 +527,7 @@ mod tests {
         let mut vtable = VTable::new(0x1000);
         vtable.add_function(0x2000, 0);
         vtable.add_function(0x2100, 1);
-        
+
         assert_eq!(vtable.function_count(), 2);
         assert!(vtable.contains_function(0x2000));
         assert!(!vtable.contains_function(0x3000));
@@ -523,7 +539,7 @@ mod tests {
             0x55, 0x48, 0x89, 0xE5, // push rbp; mov rbp, rsp
             0x90, 0x90, 0x90, 0x90, // nops
         ];
-        
+
         assert!(CodeHeuristics::has_function_prologue(&data, 0));
         assert!(!CodeHeuristics::has_function_prologue(&data, 4));
     }
@@ -535,7 +551,7 @@ mod tests {
             max_functions: 10,
             ..Default::default()
         };
-        
+
         let scanner = VTableScanner::with_config(config);
         assert_eq!(scanner.config.min_functions, 3);
         assert_eq!(scanner.config.max_functions, 10);

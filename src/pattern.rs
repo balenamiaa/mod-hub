@@ -4,6 +4,7 @@
 //! reverse engineering and binary analysis. It includes multiple search algorithms
 //! with different performance characteristics for various use cases.
 
+use crate::errors::Error;
 use std::collections::HashMap;
 
 /// Represents a pattern that can contain wildcards and exact byte matches.
@@ -16,7 +17,7 @@ pub struct Pattern {
 impl Pattern {
     /// Creates a new pattern from a string representation.
     /// Format: "48 8B ?? 74 ??" where ?? represents wildcards.
-    pub fn new(pattern_str: &str) -> Result<Self, PatternError> {
+    pub fn new(pattern_str: &str) -> Result<Self, Error> {
         let parts: Vec<&str> = pattern_str.split_whitespace().collect();
         let mut bytes = Vec::with_capacity(parts.len());
         let mut mask = String::with_capacity(parts.len());
@@ -27,25 +28,25 @@ impl Pattern {
                 mask.push('?');
             } else if part.len() == 2 {
                 let byte = u8::from_str_radix(part, 16)
-                    .map_err(|_| PatternError::InvalidHex(part.to_string()))?;
+                    .map_err(|_| Error::InvalidHex(part.to_string()))?;
                 bytes.push(Some(byte));
                 mask.push('x');
             } else {
-                return Err(PatternError::InvalidFormat(part.to_string()));
+                return Err(Error::InvalidPatternFormat(part.to_string()));
             }
         }
 
         if bytes.is_empty() {
-            return Err(PatternError::EmptyPattern);
+            return Err(Error::EmptyPattern);
         }
 
         Ok(Pattern { bytes, mask })
     }
 
     /// Creates a pattern from raw bytes and a mask string.
-    pub fn from_bytes_and_mask(bytes: &[u8], mask: &str) -> Result<Self, PatternError> {
+    pub fn from_bytes_and_mask(bytes: &[u8], mask: &str) -> Result<Self, Error> {
         if bytes.len() != mask.len() {
-            return Err(PatternError::MaskLengthMismatch);
+            return Err(Error::MaskLengthMismatch);
         }
 
         let mut pattern_bytes = Vec::with_capacity(bytes.len());
@@ -54,7 +55,7 @@ impl Pattern {
             match mask_char {
                 'x' | 'X' => pattern_bytes.push(Some(bytes[i])),
                 '?' => pattern_bytes.push(None),
-                _ => return Err(PatternError::InvalidMaskChar(mask_char)),
+                _ => return Err(Error::InvalidMaskChar(mask_char)),
             }
         }
 
@@ -99,21 +100,6 @@ impl Pattern {
         }
         true
     }
-}
-
-/// Errors that can occur during pattern operations.
-#[derive(Debug, thiserror::Error)]
-pub enum PatternError {
-    #[error("Invalid hex value: {0}")]
-    InvalidHex(String),
-    #[error("Invalid format: {0}")]
-    InvalidFormat(String),
-    #[error("Empty pattern")]
-    EmptyPattern,
-    #[error("Mask length doesn't match bytes length")]
-    MaskLengthMismatch,
-    #[error("Invalid mask character: {0}")]
-    InvalidMaskChar(char),
 }
 
 /// Result of a pattern search operation.
@@ -430,13 +416,13 @@ impl PatternScanner {
     }
 
     /// Scans for a pattern and returns all matches.
-    pub fn scan(&self, pattern_str: &str, data: &[u8]) -> Result<Vec<PatternMatch>, PatternError> {
+    pub fn scan(&self, pattern_str: &str, data: &[u8]) -> Result<Vec<PatternMatch>, Error> {
         let pattern = Pattern::new(pattern_str)?;
         Ok(self.matcher.find_all(&pattern, data))
     }
 
     /// Scans for a pattern and returns the first match.
-    pub fn scan_first(&self, pattern_str: &str, data: &[u8]) -> Result<Option<PatternMatch>, PatternError> {
+    pub fn scan_first(&self, pattern_str: &str, data: &[u8]) -> Result<Option<PatternMatch>, Error> {
         let pattern = Pattern::new(pattern_str)?;
         Ok(self.matcher.find_first(&pattern, data))
     }

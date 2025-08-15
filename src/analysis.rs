@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::errors::Error;
 use crate::memory::{MemoryScanner, ComprehensiveScanResult};
-use crate::pattern::PatternError;
 use crate::vtable::{VTable, VTableScanner, ClassHierarchy, VTableAnalyzer};
 
 /// Configuration for analysis operations.
@@ -245,7 +245,7 @@ impl AnalysisEngine {
     }
 
     /// Performs comprehensive analysis of the target binary.
-    pub fn analyze(&self) -> Result<AnalysisResult, AnalysisError> {
+    pub fn analyze(&self) -> Result<AnalysisResult, Error> {
         let start_time = std::time::Instant::now();
 
         // Perform initial scans
@@ -295,7 +295,7 @@ impl AnalysisEngine {
     }
 
     /// Performs targeted analysis on specific addresses.
-    pub fn analyze_addresses(&self, addresses: &[usize]) -> Result<Vec<AddressAnalysis>, AnalysisError> {
+    pub fn analyze_addresses(&self, addresses: &[usize]) -> Result<Vec<AddressAnalysis>, Error> {
         let mut results = Vec::new();
         
         for &address in addresses {
@@ -307,10 +307,10 @@ impl AnalysisEngine {
     }
 
     /// Analyzes a specific function at the given address.
-    pub fn analyze_function(&self, address: usize) -> Result<DiscoveredFunction, AnalysisError> {
+    pub fn analyze_function(&self, address: usize) -> Result<DiscoveredFunction, Error> {
         // Read function data
         let data = self.memory_scanner.read_memory(address, 512)
-            .map_err(|e| AnalysisError::MemoryError(e.to_string()))?;
+            .map_err(|e| Error::MemoryError(e.to_string()))?;
 
         let mut function = DiscoveredFunction {
             address,
@@ -340,13 +340,13 @@ impl AnalysisEngine {
         Ok(function)
     }
 
-    fn comprehensive_scan(&self) -> Result<ComprehensiveScanResult, AnalysisError> {
+    fn comprehensive_scan(&self) -> Result<ComprehensiveScanResult, Error> {
         let patterns = self.pattern_database.get_common_patterns();
         self.memory_scanner.comprehensive_scan(&patterns)
-            .map_err(|e| AnalysisError::ScanError(e.to_string()))
+            .map_err(|e| Error::ScanError(e.to_string()))
     }
 
-    fn analyze_functions(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<DiscoveredFunction>, AnalysisError> {
+    fn analyze_functions(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<DiscoveredFunction>, Error> {
         let mut functions = Vec::new();
         
         // Extract functions from pattern matches
@@ -370,7 +370,7 @@ impl AnalysisEngine {
         Ok(functions)
     }
 
-    fn analyze_structures(&self, vtables: &[VTable]) -> Result<Vec<DiscoveredStruct>, AnalysisError> {
+    fn analyze_structures(&self, vtables: &[VTable]) -> Result<Vec<DiscoveredStruct>, Error> {
         let mut structures = Vec::new();
         
         for vtable in vtables {
@@ -399,7 +399,7 @@ impl AnalysisEngine {
         Ok(structures)
     }
 
-    fn find_string_references(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<StringReference>, AnalysisError> {
+    fn find_string_references(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<StringReference>, Error> {
         let mut string_refs = Vec::new();
         
         // Look for ASCII strings in readable regions
@@ -415,17 +415,17 @@ impl AnalysisEngine {
         Ok(string_refs)
     }
 
-    fn analyze_imports(&self) -> Result<Vec<ImportEntry>, AnalysisError> {
+    fn analyze_imports(&self) -> Result<Vec<ImportEntry>, Error> {
         // Simplified - would need proper PE parsing
         Ok(Vec::new())
     }
 
-    fn analyze_exports(&self) -> Result<Vec<ExportEntry>, AnalysisError> {
+    fn analyze_exports(&self) -> Result<Vec<ExportEntry>, Error> {
         // Simplified - would need proper PE parsing
         Ok(Vec::new())
     }
 
-    fn detect_code_patterns(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<CodePattern>, AnalysisError> {
+    fn detect_code_patterns(&self, scan_result: &ComprehensiveScanResult) -> Result<Vec<CodePattern>, Error> {
         let mut patterns = Vec::new();
         
         // Detect function prologues
@@ -453,9 +453,9 @@ impl AnalysisEngine {
         Ok(patterns)
     }
 
-    fn analyze_single_address(&self, address: usize) -> Result<AddressAnalysis, AnalysisError> {
+    fn analyze_single_address(&self, address: usize) -> Result<AddressAnalysis, Error> {
         let data = self.memory_scanner.read_memory(address, 64)
-            .map_err(|e| AnalysisError::MemoryError(e.to_string()))?;
+            .map_err(|e| Error::MemoryError(e.to_string()))?;
 
         let analysis_type = if self.pattern_database.is_function_prologue(&data) {
             AddressType::Function
@@ -645,18 +645,6 @@ impl PatternDatabase {
     }
 }
 
-/// Errors that can occur during analysis.
-#[derive(Debug, thiserror::Error)]
-pub enum AnalysisError {
-    #[error("Memory error: {0}")]
-    MemoryError(String),
-    #[error("Pattern error: {0}")]
-    PatternError(#[from] PatternError),
-    #[error("Scan error: {0}")]
-    ScanError(String),
-    #[error("Analysis failed: {0}")]
-    AnalysisFailed(String),
-}
 
 #[cfg(test)]
 mod tests {

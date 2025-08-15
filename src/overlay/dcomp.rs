@@ -20,6 +20,7 @@ impl Composition {
         let target = unsafe { device.CreateTargetForHwnd(hwnd, true) }
             .map_err(Error::DcompCreateTarget)?;
         let visual = unsafe { device.CreateVisual() }.map_err(Error::DcompCreateVisual)?;
+        log::debug!("dcomp device/target/visual created");
         Ok(Self {
             device,
             target,
@@ -42,6 +43,7 @@ impl Composition {
         unsafe {
             self.device.Commit().map_err(Error::DcompCommit)?;
         }
+        log::debug!("dcomp bound swapchain and committed");
         Ok(())
     }
 }

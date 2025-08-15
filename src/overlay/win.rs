@@ -23,6 +23,7 @@ pub fn register_window_class(name: &str) -> Result<PCWSTR> {
     if atom == 0 {
         return Err(Error::RegisterClassFailed);
     }
+    log::debug!("window class registered: {}", name);
     Ok(PCWSTR(wname.as_ptr()))
 }
 
@@ -48,6 +49,7 @@ pub fn create_owner_window(class: PCWSTR, title: &str) -> Result<HWND> {
         )
     }
     .map_err(Error::CreateOwnerWindow)?;
+    log::debug!("owner window created: {:?}", hwnd);
     Ok(hwnd)
 }
 
@@ -123,6 +125,7 @@ pub fn create_overlay_window(
         let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
     }
 
+    log::debug!("overlay window created: {:?}", hwnd);
     Ok(hwnd)
 }
 
@@ -140,6 +143,7 @@ pub fn show_no_activate(hwnd: HWND) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
     }
+    log::trace!("show_no_activate called");
 }
 
 /// Ensures the overlay stays topmost.
@@ -155,6 +159,7 @@ pub fn set_topmost(hwnd: HWND) {
             SWP_NOMOVE | SWP_NOSIZE,
         );
     }
+    log::trace!("set_topmost applied");
 }
 
 /// Toggles click‑through mode by setting/removing WS_EX_TRANSPARENT and activation.
@@ -201,6 +206,7 @@ pub fn apply_transparency(hwnd: HWND) {
         };
         let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
     }
+    log::trace!("transparency applied");
 }
 
 extern "system" fn def_wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {

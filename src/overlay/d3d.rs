@@ -67,6 +67,7 @@ impl D3D {
                 .CreateSwapChainForComposition(&dxgi_device, &desc, None)
                 .map_err(Error::DxgiCreateSwapChain)?
         };
+        log::debug!("D3D11 device + swapchain created: {}x{}", width, height);
 
         Ok(Self {
             device,
@@ -92,6 +93,7 @@ impl D3D {
         self.width = w;
         self.height = h;
         self.rtv = None;
+        log::debug!("swapchain resized: {}x{}", w, h);
         Ok(())
     }
 
@@ -129,6 +131,9 @@ impl D3D {
     pub fn present(&self) {
         unsafe {
             let _ = self.swap_chain.Present(0, DXGI_PRESENT(0));
+        }
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("frame presented");
         }
     }
 }

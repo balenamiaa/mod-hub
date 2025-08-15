@@ -65,6 +65,38 @@ pub enum Error {
     #[error("hook install failed")]
     HookInstall(#[source] ilhook::HookError),
 
+    // Pattern matching
+    #[error("Invalid hex value: {0}")]
+    InvalidHex(String),
+    #[error("Invalid pattern format: {0}")]
+    InvalidPatternFormat(String),
+    #[error("Empty pattern")]
+    EmptyPattern,
+    #[error("Mask length doesn't match bytes length")]
+    MaskLengthMismatch,
+    #[error("Invalid mask character: {0}")]
+    InvalidMaskChar(char),
+
+    // Memory operations
+    #[error("Failed to open process")]
+    ProcessAccessFailed,
+    #[error("Failed to read memory at 0x{address:X}: {reason}")]
+    ReadFailed { address: usize, reason: String },
+    #[error("Failed to write memory at 0x{address:X}: {reason}")]
+    WriteFailed { address: usize, reason: String },
+    #[error("Failed to query memory information: {reason}")]
+    QueryFailed { reason: String },
+    #[error("Invalid address: 0x{address:X}")]
+    InvalidAddress { address: usize },
+
+    // Analysis
+    #[error("Memory error: {0}")]
+    MemoryError(String),
+    #[error("Scan error: {0}")]
+    ScanError(String),
+    #[error("Analysis failed: {0}")]
+    AnalysisFailed(String),
+
     // Generic fallbacks
     #[error("windows api error")]
     Windows(#[from] windows::core::Error),

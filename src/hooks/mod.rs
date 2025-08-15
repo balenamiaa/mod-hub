@@ -23,9 +23,10 @@ impl<C: Send + Sync + 'static> HookContext<C> {
     pub unsafe fn install_jmp_back(
         &self,
         target_address: usize,
-        callback: unsafe extern "win64" fn(*mut Registers, usize),
+        callback: unsafe extern "win64" fn(registers: *mut Registers, user_data: usize),
         user_data: usize,
     ) -> Result<HookGuard> {
+        log::debug!("install_jmp_back: target=0x{target_address:x} user_data=0x{user_data:x}");
         let hook = unsafe {
             Hooker::new(
                 target_address,
@@ -37,15 +38,21 @@ impl<C: Send + Sync + 'static> HookContext<C> {
             .hook()
         }
         .map_err(|e| Error::HookInstall(e))?;
+        log::info!("jmp_back hook installed at 0x{target_address:x}");
         Ok(HookGuard::own(hook))
     }
 
     pub unsafe fn install_retn(
         &self,
         target_address: usize,
-        callback: unsafe extern "win64" fn(*mut Registers, usize, usize) -> usize,
+        callback: unsafe extern "win64" fn(
+            registers: *mut Registers,
+            ori_func_ptr: usize,
+            user_data: usize,
+        ) -> usize,
         user_data: usize,
     ) -> Result<HookGuard> {
+        log::debug!("install_retn: target=0x{target_address:x} user_data=0x{user_data:x}");
         let hook = unsafe {
             Hooker::new(
                 target_address,
@@ -57,6 +64,7 @@ impl<C: Send + Sync + 'static> HookContext<C> {
             .hook()
         }
         .map_err(|e| Error::HookInstall(e))?;
+        log::info!("retn hook installed at 0x{target_address:x}");
         Ok(HookGuard::own(hook))
     }
 }
@@ -87,6 +95,9 @@ impl fmt::Debug for HookGuard {
 
 impl Drop for HookGuard {
     fn drop(&mut self) {
+        if self.inner.is_some() {
+            log::debug!("unhooking guard");
+        }
         let _ = self.inner.take();
     }
 }
@@ -121,6 +132,7 @@ where
     C: Send + Sync + 'static,
 {
     pub fn new(config: C) -> Self {
+        log::info!("HookManager created");
         Self {
             config: Arc::new(RwLock::new(config)),
             modules: Vec::new(),
@@ -144,6 +156,8 @@ where
     where
         M: HookModule<C>,
     {
+        let name = module.name();
+        log::debug!("registering hook module: {}", name);
         self.modules.push(Box::new(module));
         self
     }
@@ -156,10 +170,16 @@ where
             config: self.config.clone(),
         };
         for module in &mut self.modules {
+            log::info!("starting module: {}", module.name());
             let mut installed = module.init(&ctx)?;
             self.guards.append(&mut installed);
         }
         self.started = true;
+        log::info!(
+            "HookManager started: {} modules, {} hooks",
+            self.modules.len(),
+            self.guards.len()
+        );
         Ok(())
     }
 
@@ -168,10 +188,12 @@ where
             return;
         }
         for module in &mut self.modules {
+            log::info!("stopping module: {}", module.name());
             module.shutdown();
         }
         self.guards.clear();
         self.started = false;
+        log::info!("HookManager stopped");
     }
 }
 
@@ -205,6 +227,7 @@ where
     C: Send + Sync + 'static,
 {
     let _ = GLOBAL_ANY.set(Mutex::new(Box::new(HookManager::<C>::new(config))));
+    log::debug!("global hook manager initialized");
 }
 
 pub fn with_manager<C, R>(f: impl FnOnce(&mut HookManager<C>) -> R) -> Option<R>
@@ -231,6 +254,7 @@ where
     C: Send + Sync + 'static,
 {
     let _ = with_manager::<C, _>(|mgr| mgr.set_config(config));
+    log::debug!("hook config updated");
 }
 
 pub fn start<C>() -> Result<()>

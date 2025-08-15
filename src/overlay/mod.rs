@@ -1,4 +1,4 @@
-use crate::errors::{Error, Result};
+use crate::errors::Result;
 use crate::winapi;
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
@@ -37,6 +37,8 @@ pub trait AppUi: Send + 'static {
 #[derive(Clone, Debug)]
 pub struct OverlayBuilder {
     pub title: String,
+    pub window_class: String,
+    pub owner_class: String,
     pub hide_from_alt_tab: bool,
     pub width: i32,
     pub height: i32,
@@ -47,7 +49,9 @@ pub struct OverlayBuilder {
 impl Default for OverlayBuilder {
     fn default() -> Self {
         Self {
-            title: String::from("Overlay"),
+            title: String::from("Overlay Title"),
+            window_class: String::from("overlay_wnd"),
+            owner_class: String::from("overlay_owner"),
             hide_from_alt_tab: true,
             width: unsafe { GetSystemMetrics(SM_CXSCREEN) },
             height: unsafe { GetSystemMetrics(SM_CYSCREEN) },
@@ -88,17 +92,36 @@ impl OverlayBuilder {
         self.toggle_vk = vk;
         self
     }
+    /// Sets the window class name.
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_class = class.into();
+        self
+    }
+    /// Sets the owner window class name.
+    pub fn owner_class(mut self, class: impl Into<String>) -> Self {
+        self.owner_class = class.into();
+        self
+    }
 
     /// Creates the overlay window, runs the event loop, renders and presents frames until closed.
     pub fn run<T: AppUi>(self, mut app: T) -> Result<()> {
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
         }
+        log::info!(
+            "overlay starting: {} ({}x{}), hide_alt_tab={}, click_through={}",
+            self.title,
+            self.width,
+            self.height,
+            self.hide_from_alt_tab,
+            self.click_through_on_start
+        );
 
-        let class = win::register_window_class("restident_overlay_wnd")?;
-        let owner_class = win::register_window_class("restident_overlay_owner")?;
+        let class = win::register_window_class(&self.window_class)?;
+        let owner_class = win::register_window_class(&self.owner_class)?;
 
         let owner = win::create_owner_window(owner_class, &self.title)?;
+        log::trace!("owner window created: {:?}", owner);
 
         let hwnd = win::create_overlay_window(
             class,
@@ -108,6 +131,7 @@ impl OverlayBuilder {
             self.height,
             self.hide_from_alt_tab,
         )?;
+        log::info!("overlay window created: {:?}", hwnd);
 
         let mut rect = RECT::default();
         unsafe {
@@ -117,8 +141,10 @@ impl OverlayBuilder {
         let height = (rect.bottom - rect.top).max(1) as u32;
 
         let mut d3d = d3d::D3D::new(width, height)?;
+        log::info!("d3d initialized: {}x{}", width, height);
         let mut comp = dcomp::Composition::new(hwnd, &d3d)?;
         comp.bind_swap_chain(&d3d)?;
+        log::trace!("directcomposition bound to swapchain and committed");
 
         win::apply_transparency(hwnd);
         win::set_topmost(hwnd);
@@ -128,10 +154,15 @@ impl OverlayBuilder {
             win::set_click_through(hwnd, false);
         }
         win::show_no_activate(hwnd);
+        log::info!(
+            "overlay shown (no activate), click_through={}",
+            self.click_through_on_start
+        );
 
         let egui_ctx = egui::Context::default();
         let mut input = InputCollector::new(hwnd);
         let mut painter = painter_d3d::PainterD3D::new(&d3d)?;
+        log::trace!("egui painter ready");
 
         let mut click_through = self.click_through_on_start;
         let mut prev_toggle = false;
@@ -161,6 +192,7 @@ impl OverlayBuilder {
             if down && !prev_toggle {
                 click_through = !click_through;
                 win::set_click_through(hwnd, click_through);
+                log::info!("click-through toggled -> {}", click_through);
             }
             prev_toggle = down;
 
@@ -180,6 +212,7 @@ impl OverlayBuilder {
                 let w = (r.right - r.left).max(1) as u32;
                 let h = (r.bottom - r.top).max(1) as u32;
                 input.set_screen(w as f32, h as f32);
+                log::trace!("resized to {}x{}", w, h);
             }
             unsafe {
                 windows::Win32::System::Threading::Sleep(16);
@@ -192,6 +225,7 @@ impl OverlayBuilder {
         unsafe {
             CoUninitialize();
         }
+        log::info!("overlay shutdown complete");
 
         Ok(())
     }
